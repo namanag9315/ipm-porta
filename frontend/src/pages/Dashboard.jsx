@@ -1,0 +1,705 @@
+import { motion } from 'framer-motion'
+import {
+  ArrowRight,
+  BellRing,
+  BookOpenText,
+  Cake,
+  ChevronRight,
+  ClipboardCheck,
+  UtensilsCrossed,
+} from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+
+import { useAuth } from '../hooks/useAuth'
+import api from '../lib/api'
+import { cn } from '../lib/cn'
+import { combineDateAndTime, formatDateLabel, formatTimeLabel, toIsoDate } from '../lib/date'
+
+const MAX_DASHBOARD_CLASSES = 3
+const COURSE_COLOR_CLASSES = [
+  'border-l-blue-500',
+  'border-l-emerald-500',
+  'border-l-violet-500',
+  'border-l-amber-500',
+  'border-l-cyan-500',
+  'border-l-fuchsia-500',
+  'border-l-orange-500',
+]
+
+const MEAL_SLOTS = [
+  {
+    key: 'breakfast',
+    label: 'Breakfast',
+    startHour: 7,
+    startMinute: 30,
+    endHour: 10,
+    endMinute: 30,
+    patterns: ['breakfast'],
+  },
+  {
+    key: 'lunch',
+    label: 'Lunch',
+    startHour: 12,
+    startMinute: 30,
+    endHour: 15,
+    endMinute: 0,
+    patterns: ['lunch'],
+  },
+  {
+    key: 'snacks',
+    label: 'Snacks / High Tea',
+    startHour: 16,
+    startMinute: 30,
+    endHour: 18,
+    endMinute: 30,
+    patterns: ['snacks', 'high tea', 'hi tea'],
+  },
+  {
+    key: 'dinner',
+    label: 'Dinner',
+    startHour: 19,
+    startMinute: 30,
+    endHour: 21,
+    endMinute: 30,
+    patterns: ['dinner'],
+  },
+]
+
+const HOT_BREAKFAST_WIDGET_HINTS = [
+  'hot',
+  'preparation',
+  'egg',
+  'omelette',
+  'poha',
+  'upma',
+  'paratha',
+  'idli',
+  'dosa',
+  'uttapam',
+  'cutlet',
+  'sandwich',
+]
+
+function getCountdown(targetDate) {
+  if (!targetDate) {
+    return 'No upcoming class'
+  }
+
+  const difference = targetDate.getTime() - Date.now()
+  if (difference <= 0) {
+    return 'Starting now'
+  }
+
+  const totalSeconds = Math.floor(difference / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`
+  }
+  return `${minutes}m ${seconds}s`
+}
+
+function getMealSlot(category) {
+  const normalized = String(category || '').toLowerCase()
+  return MEAL_SLOTS.find((slot) =>
+    slot.patterns.some((pattern) => normalized.includes(pattern)),
+  )
+}
+
+function createDateWithTime(dateIso, hour, minute) {
+  return new Date(
+    `${dateIso}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`,
+  )
+}
+
+function prioritizeMealItemsForWidget(label, items) {
+  const uniqueItems = [...new Set(items || [])]
+  if (!String(label || '').toLowerCase().includes('breakfast')) {
+    return uniqueItems
+  }
+  return uniqueItems.sort((left, right) => {
+    const leftText = String(left || '').toLowerCase()
+    const rightText = String(right || '').toLowerCase()
+    const leftRank = HOT_BREAKFAST_WIDGET_HINTS.some((hint) => leftText.includes(hint)) ? 0 : 1
+    const rightRank = HOT_BREAKFAST_WIDGET_HINTS.some((hint) => rightText.includes(hint)) ? 0 : 1
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank
+    }
+    return leftText.localeCompare(rightText)
+  })
+}
+
+function isDueIn48Hours(dueDate, nowEpoch) {
+  if (!dueDate) {
+    return false
+  }
+  const dueAt = new Date(`${dueDate}T23:59:59`)
+  const delta = dueAt.getTime() - nowEpoch
+  return delta >= 0 && delta <= 48 * 60 * 60 * 1000
+}
+
+function courseColorClass(courseCode) {
+  const normalized = String(courseCode || 'NA')
+  const hash = normalized.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)
+  return COURSE_COLOR_CLASSES[hash % COURSE_COLOR_CLASSES.length]
+}
+
+function sessionColorClass(session) {
+  return courseColorClass(session?.course?.code || session?.raw_text || session?.id || 'SESSION')
+}
+
+function normalizeCourseDisplayName(value) {
+  const cleaned = String(value || '')
+    .replace(/\bsection\s*[AB]\b/gi, '')
+    .replace(/\s+\b[AB]\b\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return cleaned || 'Course'
+}
+
+export default function Dashboard() {
+  const { user } = useAuth()
+  const [attendance, setAttendance] = useState([])
+  const [sessions, setSessions] = useState([])
+  const [messItems, setMessItems] = useState([])
+  const [birthdaysToday, setBirthdaysToday] = useState([])
+  const [recentAnnouncements, setRecentAnnouncements] = useState([])
+  const [upcomingAssignments, setUpcomingAssignments] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [clock, setClock] = useState(Date.now())
+
+  useEffect(() => {
+    const tick = setInterval(() => setClock(Date.now()), 1000)
+    return () => clearInterval(tick)
+  }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function fetchDashboardData() {
+      if (!user?.rollNumber) {
+        setLoading(false)
+        return
+      }
+
+      setLoading(true)
+      setError('')
+
+      try {
+        const menuDates = Array.from({ length: 3 }).map((_, index) => {
+          const date = new Date()
+          date.setDate(date.getDate() + index)
+          return toIsoDate(date)
+        })
+
+        const [attendanceRes, timetableRes, extrasRes, ...menuResponses] = await Promise.all([
+          api.get(`/api/v1/attendance/${user.rollNumber}/`, { signal: controller.signal }),
+          api.get(`/api/v1/timetable/${user.rollNumber}/`, { signal: controller.signal }),
+          api.get('/api/v1/dashboard-extras/', { signal: controller.signal }),
+          ...menuDates.map((dateIso) =>
+            api.get(`/api/v1/mess-menu/?date=${dateIso}`, { signal: controller.signal }),
+          ),
+        ])
+
+        setAttendance(Array.isArray(attendanceRes.data) ? attendanceRes.data : [])
+        setSessions(Array.isArray(timetableRes.data) ? timetableRes.data : [])
+        setBirthdaysToday(Array.isArray(extrasRes.data?.birthdays_today) ? extrasRes.data.birthdays_today : [])
+        setRecentAnnouncements(
+          Array.isArray(extrasRes.data?.recent_announcements) ? extrasRes.data.recent_announcements : [],
+        )
+        setUpcomingAssignments(
+          Array.isArray(extrasRes.data?.upcoming_assignments) ? extrasRes.data.upcoming_assignments : [],
+        )
+
+        const flattenedMenus = menuResponses.flatMap((response, index) => {
+          const items = Array.isArray(response.data) ? response.data : []
+          const dateIso = menuDates[index]
+          return items.map((item) => ({
+            ...item,
+            date: item?.date || dateIso,
+          }))
+        })
+        setMessItems(flattenedMenus)
+      } catch (fetchError) {
+        if (fetchError.name !== 'CanceledError') {
+          setError('Unable to load dashboard data right now.')
+        }
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchDashboardData()
+    return () => controller.abort()
+  }, [user?.rollNumber])
+
+  const courseAttendanceRows = useMemo(() => {
+    return attendance
+      .map((entry) => ({
+        code: entry?.course?.code || 'N/A',
+        name: normalizeCourseDisplayName(entry?.course?.name),
+        percentage: Number(entry?.percentage || 0),
+        totalDelivered: Number(entry?.total_delivered || 0),
+      }))
+      .filter((entry) => entry.totalDelivered > 0 || entry.percentage > 0)
+      .sort((left, right) => left.code.localeCompare(right.code))
+  }, [attendance])
+
+  const averageAttendance = useMemo(() => {
+    if (courseAttendanceRows.length === 0) {
+      return 0
+    }
+    const total = courseAttendanceRows.reduce((sum, item) => sum + item.percentage, 0)
+    return Math.round(total / courseAttendanceRows.length)
+  }, [courseAttendanceRows])
+
+  const classWindow = useMemo(() => {
+    const parsedSessions = sessions
+      .map((session) => {
+        const startAt = combineDateAndTime(session.date, session.start_time)
+        const endAt = combineDateAndTime(session.date, session.end_time)
+        if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
+          return null
+        }
+        return {
+          ...session,
+          startAt,
+          endAt,
+        }
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.startAt - right.startAt)
+
+    const byDate = parsedSessions.reduce((accumulator, session) => {
+      if (!accumulator.has(session.date)) {
+        accumulator.set(session.date, [])
+      }
+      accumulator.get(session.date).push(session)
+      return accumulator
+    }, new Map())
+
+    const now = new Date(clock)
+    const todayIso = toIsoDate(now)
+    const tomorrow = new Date(now)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    const tomorrowIso = toIsoDate(tomorrow)
+
+    let title = "Today's Classes"
+    let targetDateIso = todayIso
+    let daySessions = byDate.get(todayIso) || []
+
+    const hasUnfinishedToday = daySessions.some((session) => session.endAt.getTime() >= clock)
+    if (!hasUnfinishedToday || daySessions.length === 0) {
+      title = "Tomorrow's Classes"
+      targetDateIso = tomorrowIso
+      daySessions = byDate.get(tomorrowIso) || []
+    }
+
+    if (daySessions.length === 0) {
+      const nextDateIso = [...byDate.keys()].find(
+        (dateIso) => new Date(`${dateIso}T00:00:00`).getTime() >= clock,
+      )
+      if (nextDateIso) {
+        title = 'Upcoming Classes'
+        targetDateIso = nextDateIso
+        daySessions = byDate.get(nextDateIso) || []
+      }
+    }
+
+    const nextUpcomingClass = parsedSessions.find((session) => session.startAt.getTime() >= clock) || null
+
+    return {
+      title,
+      targetDateIso,
+      classes: daySessions.slice(0, MAX_DASHBOARD_CLASSES),
+      nextUpcomingClass,
+    }
+  }, [sessions, clock])
+
+  const nextMeal = useMemo(() => {
+    const grouped = new Map()
+
+    messItems.forEach((item) => {
+      const slot = getMealSlot(item.category)
+      if (!slot || !item.date) {
+        return
+      }
+
+      const key = `${item.date}:${slot.key}`
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          key,
+          label: slot.label,
+          date: item.date,
+          startAt: createDateWithTime(item.date, slot.startHour, slot.startMinute),
+          endAt: createDateWithTime(item.date, slot.endHour, slot.endMinute),
+          items: [],
+        })
+      }
+
+      grouped.get(key).items.push(item.item_name)
+    })
+
+    const sortedMeals = [...grouped.values()].sort((left, right) => left.startAt - right.startAt)
+    return sortedMeals.find((meal) => meal.endAt.getTime() >= clock) || sortedMeals[0] || null
+  }, [messItems, clock])
+
+  const nextMealItems = useMemo(() => {
+    if (!nextMeal) {
+      return []
+    }
+    return prioritizeMealItemsForWidget(nextMeal.label, nextMeal.items).slice(0, 3)
+  }, [nextMeal])
+
+  const assignmentRows = useMemo(
+    () =>
+      upcomingAssignments.map((assignment) => ({
+        ...assignment,
+        dueSoon: isDueIn48Hours(assignment?.due_date, clock),
+      })),
+    [upcomingAssignments, clock],
+  )
+
+  const attendanceByCourseCode = useMemo(() => {
+    const map = new Map()
+    courseAttendanceRows.forEach((item) => {
+      map.set(String(item.code || '').toUpperCase(), Number(item.percentage || 0))
+    })
+    return map
+  }, [courseAttendanceRows])
+
+  const countdown = getCountdown(classWindow.nextUpcomingClass?.startAt)
+  const driveLink = attendance.find((entry) => entry?.course?.drive_link)?.course?.drive_link
+
+  return (
+    <div className="space-y-6">
+      {error ? (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-12">
+        <motion.section
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35 }}
+          className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-[#1E3A8A] to-[#2B4EA2] p-6 text-white shadow-soft md:col-span-2 xl:col-span-7 xl:row-span-2"
+        >
+          <div className="absolute -right-8 -top-10 h-44 w-44 rounded-full bg-cyan-200/20 blur-2xl" />
+          <div className="absolute -bottom-16 left-0 h-44 w-44 rounded-full bg-blue-200/20 blur-3xl" />
+
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/75">
+            {classWindow.title}
+          </p>
+          <h2 className="mt-3 heading-tight max-w-xl text-3xl font-semibold leading-tight sm:text-4xl">
+            {classWindow.targetDateIso
+              ? formatDateLabel(`${classWindow.targetDateIso}T00:00:00`)
+              : 'No classes scheduled'}
+          </h2>
+
+          {classWindow.classes.length > 0 ? (
+            <>
+              <div className="mt-6 space-y-3">
+                {classWindow.classes.map((session) => {
+                  const sessionCourseCode = String(session?.course?.code || '').toUpperCase()
+                  const attendancePercentage = attendanceByCourseCode.get(sessionCourseCode)
+                  const shouldAttend =
+                    Number.isFinite(attendancePercentage) && Number(attendancePercentage) < 75
+
+                  return (
+                    <article
+                      key={session.id}
+                      className={cn(
+                        'rounded-2xl border border-white/20 border-l-4 bg-white/10 px-4 py-3 backdrop-blur-sm',
+                        sessionColorClass(session),
+                      )}
+                    >
+                      <p className="text-sm font-semibold text-white">
+                        {session.raw_text || session.course?.name || 'Class'}
+                      </p>
+                      <p className="mt-1 text-xs text-white/80">
+                        {formatTimeLabel(session.startAt)} - {formatTimeLabel(session.endAt)} • Room{' '}
+                        {session.room}
+                      </p>
+                      {shouldAttend ? (
+                        <p className="mt-2 text-[11px] font-semibold text-amber-100">
+                          You should attend this session
+                        </p>
+                      ) : null}
+                    </article>
+                  )
+                })}
+              </div>
+
+              {classWindow.nextUpcomingClass ? (
+                <>
+                  <p className="mt-8 text-sm text-white/75">Next class starts in</p>
+                  <p className="heading-tight mt-1 text-3xl font-bold sm:text-4xl">{countdown}</p>
+                </>
+              ) : null}
+            </>
+          ) : (
+            <p className="mt-6 text-sm text-white/80">No classes found for this schedule window.</p>
+          )}
+        </motion.section>
+
+        <motion.section
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.05 }}
+          className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft md:col-span-2 xl:col-span-5 xl:row-span-2"
+        >
+          <div className="mb-4 flex items-center gap-2">
+            <BellRing className="h-5 w-5 text-iim-blue" />
+            <h3 className="heading-tight text-lg font-semibold text-slate-900">Announcements</h3>
+          </div>
+
+          {recentAnnouncements.length === 0 ? (
+            <p className="text-sm text-slate-500">No announcements posted yet.</p>
+          ) : (
+            <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
+              {recentAnnouncements.map((announcement) => (
+                <article
+                  key={announcement.id}
+                  className="rounded-2xl border border-slate-200/70 bg-slate-50/70 p-4"
+                >
+                  <p className="text-sm font-semibold text-slate-900">{announcement.title}</p>
+                  <p className="mt-1 text-xs text-slate-600">{announcement.content}</p>
+                  <p className="mt-2 text-[11px] font-medium text-slate-500">
+                    {announcement.posted_by} • {formatDateLabel(announcement.created_at)}
+                  </p>
+                </article>
+              ))}
+            </div>
+          )}
+        </motion.section>
+
+        <motion.section
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.08 }}
+          className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft xl:col-span-4"
+        >
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-sm font-medium text-slate-500">Attendance by Course</p>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+              Avg {averageAttendance}%
+            </span>
+          </div>
+          {courseAttendanceRows.length > 4 ? (
+            <div className="mb-3 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">
+              Scroll list <ChevronRight className="h-3 w-3 rotate-90" />
+            </div>
+          ) : null}
+
+          {courseAttendanceRows.length === 0 ? (
+            <p className="mt-6 text-sm text-slate-500">Attendance percentages are not available yet.</p>
+          ) : (
+            <div className="mt-4 max-h-52 space-y-3 overflow-y-auto pr-1">
+              {courseAttendanceRows.map((item) => (
+                <div
+                  key={item.code}
+                  className={cn(
+                    'rounded-xl border border-slate-200/80 bg-slate-50/70 p-3',
+                    'border-l-4',
+                    courseColorClass(item.code),
+                  )}
+                >
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-800">{item.code}</p>
+                    <p className="text-xs font-medium text-slate-600">{item.percentage.toFixed(2)}%</p>
+                  </div>
+                  <div className="h-2 rounded-full bg-slate-100">
+                    <div
+                      className={cn(
+                        'h-2 rounded-full',
+                        item.percentage >= 85
+                          ? 'bg-emerald-500'
+                          : item.percentage >= 75
+                            ? 'bg-amber-500'
+                            : 'bg-rose-500',
+                      )}
+                      style={{ width: `${Math.max(0, Math.min(100, item.percentage))}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">{item.name}</p>
+                  {item.percentage < 75 ? (
+                    <p className="mt-1 text-[11px] font-semibold text-rose-600">
+                      Important: Attend upcoming classes
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </motion.section>
+
+        <motion.section
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.44, delay: 0.15 }}
+          className="group rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft xl:col-span-4"
+        >
+          <Link to="/dashboard/mess-menu" className="flex h-full flex-col justify-between">
+            <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 text-iim-gold transition group-hover:scale-105 group-hover:bg-amber-100">
+              <UtensilsCrossed className="h-6 w-6" />
+            </div>
+            <div className="mt-10">
+              <p className="heading-tight text-lg font-semibold text-slate-900">Next Meal</p>
+              {nextMeal ? (
+                <>
+                  <p className="mt-1 text-sm font-medium text-slate-700">
+                    {nextMeal.label} • {formatDateLabel(`${nextMeal.date}T00:00:00`)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Starts around {formatTimeLabel(nextMeal.startAt)}
+                  </p>
+                  <div className="mt-3 space-y-1.5">
+                    {nextMealItems.map((item) => (
+                      <p key={item} className="line-clamp-1 text-xs text-slate-600">
+                        • {item}
+                      </p>
+                    ))}
+                    {nextMeal.items.length > nextMealItems.length ? (
+                      <p className="text-xs text-slate-500">+{nextMeal.items.length - nextMealItems.length} more</p>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <p className="mt-1 text-sm text-slate-500">No upcoming meal menu available.</p>
+              )}
+            </div>
+            <span className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-iim-blue">
+              Open menu <ChevronRight className="h-4 w-4" />
+            </span>
+          </Link>
+        </motion.section>
+
+        <motion.section
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.46, delay: 0.18 }}
+          className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft xl:col-span-4"
+        >
+          <div className="mb-3 flex items-center gap-2">
+            <ClipboardCheck className="h-5 w-5 text-iim-blue" />
+            <h3 className="heading-tight text-lg font-semibold text-slate-900">Upcoming Assignments</h3>
+          </div>
+
+          {assignmentRows.length === 0 ? (
+            <p className="text-sm text-slate-500">No upcoming assignments right now.</p>
+          ) : (
+            <div className="max-h-56 space-y-3 overflow-y-auto pr-1">
+              {assignmentRows.map((assignment) => (
+                <article
+                  key={assignment.id}
+                  className="rounded-2xl border border-slate-200/70 bg-slate-50/70 p-3"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-900">{assignment.title}</p>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                      {assignment.course?.code || 'N/A'}
+                    </span>
+                  </div>
+                  <p
+                    className={cn(
+                      'mt-2 text-xs font-medium',
+                      assignment.dueSoon ? 'text-rose-600' : 'text-slate-600',
+                    )}
+                  >
+                    Due {formatDateLabel(`${assignment.due_date}T00:00:00`)}
+                    {assignment.dueSoon ? ' • within 48 hours' : ''}
+                  </p>
+                </article>
+              ))}
+            </div>
+          )}
+        </motion.section>
+
+        <motion.section
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.48, delay: 0.2 }}
+          className="group rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft xl:col-span-4"
+        >
+          <a
+            href={driveLink || '/dashboard/attendance'}
+            target={driveLink ? '_blank' : undefined}
+            rel={driveLink ? 'noreferrer' : undefined}
+            className="flex h-full flex-col justify-between"
+          >
+            <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-iim-blue transition group-hover:scale-105 group-hover:bg-blue-100">
+              <BookOpenText className="h-6 w-6" />
+            </div>
+
+            <div className="mt-10">
+              <p className="heading-tight text-lg font-semibold text-slate-900">Drive Materials</p>
+              <p className="mt-1 text-sm text-slate-500">
+                {driveLink ? 'Open your course resources' : 'No drive links mapped yet'}
+              </p>
+            </div>
+
+            <span
+              className={cn(
+                'mt-5 inline-flex items-center gap-2 text-sm font-medium',
+                driveLink ? 'text-iim-blue' : 'text-slate-500',
+              )}
+            >
+              {driveLink ? 'Open link' : 'Go to attendance'} <ArrowRight className="h-4 w-4" />
+            </span>
+          </a>
+        </motion.section>
+
+        <motion.section
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.24 }}
+          className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-sky-100 via-cyan-100 to-emerald-100 p-6 text-slate-900 shadow-soft xl:col-span-12"
+        >
+          <div className="absolute -right-10 -top-8 h-28 w-28 rounded-full bg-white/50 blur-2xl" />
+          <div className="relative">
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">
+              <Cake className="h-4 w-4 text-iim-blue" />
+              Birthday Tracker
+            </div>
+            {birthdaysToday.length > 0 ? (
+              <>
+                <p className="mt-4 heading-tight text-xl font-semibold text-slate-900">Happy Birthday!</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {birthdaysToday.map((student) => (
+                    <span
+                      key={student.roll_number}
+                      className="rounded-full bg-white/90 px-3 py-1 text-sm font-medium text-slate-800"
+                    >
+                      {student.name}
+                    </span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="mt-4 heading-tight text-xl font-semibold text-slate-900">No birthdays today</p>
+                <p className="mt-2 text-sm text-slate-700">
+                  This card will auto-highlight students when their birthday matches today.
+                </p>
+              </>
+            )}
+          </div>
+        </motion.section>
+      </div>
+
+      {loading ? (
+        <div className="grid gap-4 md:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div key={index} className="h-28 animate-pulse rounded-3xl bg-white shadow-soft" />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
