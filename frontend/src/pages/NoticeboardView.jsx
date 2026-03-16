@@ -19,12 +19,22 @@ export default function NoticeboardView() {
       setLoading(true)
       setError('')
       try {
-        const [extrasResponse, pollsResponse] = await Promise.all([
+        const results = await Promise.allSettled([
           api.get('/api/v1/dashboard-extras/'),
           user?.rollNumber ? api.get(`/api/v1/polls/?roll_number=${user.rollNumber}`) : Promise.resolve({ data: [] }),
         ])
-        setAnnouncements(Array.isArray(extrasResponse.data?.recent_announcements) ? extrasResponse.data.recent_announcements : [])
-        setPolls(Array.isArray(pollsResponse.data) ? pollsResponse.data : [])
+        const extrasResponse = results[0]?.status === 'fulfilled' ? results[0].value : null
+        const pollsResponse = results[1]?.status === 'fulfilled' ? results[1].value : null
+
+        setAnnouncements(
+          Array.isArray(extrasResponse?.data?.recent_announcements) ? extrasResponse.data.recent_announcements : [],
+        )
+        setPolls(Array.isArray(pollsResponse?.data) ? pollsResponse.data : [])
+
+        const hadFailures = results.some((result) => result.status === 'rejected')
+        if (hadFailures) {
+          setError('Some noticeboard data could not be loaded yet. Please refresh in a moment.')
+        }
       } catch (fetchError) {
         setError(fetchError?.response?.data?.detail || 'Unable to load noticeboard.')
       } finally {

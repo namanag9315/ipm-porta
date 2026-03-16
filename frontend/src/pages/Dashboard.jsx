@@ -222,7 +222,7 @@ export default function Dashboard() {
           return toIsoDate(date)
         })
 
-        const [attendanceRes, timetableRes, extrasRes, ...menuResponses] = await Promise.all([
+        const results = await Promise.allSettled([
           api.get(`/api/v1/attendance/${user.rollNumber}/`, { signal: controller.signal }),
           api.get(`/api/v1/timetable/${user.rollNumber}/`, { signal: controller.signal }),
           api.get('/api/v1/dashboard-extras/', { signal: controller.signal }),
@@ -230,19 +230,42 @@ export default function Dashboard() {
             api.get(`/api/v1/mess-menu/?date=${dateIso}&template_fallback=1`, { signal: controller.signal }),
           ),
         ])
+        const attendanceRes = results[0]?.status === 'fulfilled' ? results[0].value : null
+        const timetableRes = results[1]?.status === 'fulfilled' ? results[1].value : null
+        const extrasRes = results[2]?.status === 'fulfilled' ? results[2].value : null
+        const menuResponses = results.slice(3)
 
-        setAttendance(Array.isArray(attendanceRes.data) ? attendanceRes.data : [])
-        setSessions(Array.isArray(timetableRes.data) ? timetableRes.data : [])
-        setBirthdaysToday(Array.isArray(extrasRes.data?.birthdays_today) ? extrasRes.data.birthdays_today : [])
-        setRecentAnnouncements(
-          Array.isArray(extrasRes.data?.recent_announcements) ? extrasRes.data.recent_announcements : [],
-        )
-        setUpcomingAssignments(
-          Array.isArray(extrasRes.data?.upcoming_assignments) ? extrasRes.data.upcoming_assignments : [],
-        )
+        if (attendanceRes) {
+          setAttendance(Array.isArray(attendanceRes.data) ? attendanceRes.data : [])
+        } else {
+          setAttendance([])
+        }
 
-        const flattenedMenus = menuResponses.flatMap((response, index) => {
-          const items = Array.isArray(response.data) ? response.data : []
+        if (timetableRes) {
+          setSessions(Array.isArray(timetableRes.data) ? timetableRes.data : [])
+        } else {
+          setSessions([])
+        }
+
+        if (extrasRes) {
+          setBirthdaysToday(Array.isArray(extrasRes.data?.birthdays_today) ? extrasRes.data.birthdays_today : [])
+          setRecentAnnouncements(
+            Array.isArray(extrasRes.data?.recent_announcements) ? extrasRes.data.recent_announcements : [],
+          )
+          setUpcomingAssignments(
+            Array.isArray(extrasRes.data?.upcoming_assignments) ? extrasRes.data.upcoming_assignments : [],
+          )
+        } else {
+          setBirthdaysToday([])
+          setRecentAnnouncements([])
+          setUpcomingAssignments([])
+        }
+
+        const flattenedMenus = menuResponses.flatMap((result, index) => {
+          if (result.status !== 'fulfilled') {
+            return []
+          }
+          const items = Array.isArray(result.value.data) ? result.value.data : []
           const dateIso = menuDates[index]
           return items.map((item) => ({
             ...item,
@@ -250,6 +273,10 @@ export default function Dashboard() {
           }))
         })
         setMessItems(flattenedMenus)
+        const hadFailures = results.some((result) => result.status === 'rejected')
+        if (hadFailures) {
+          setError('Some dashboard data could not be loaded yet. Please refresh in a moment.')
+        }
       } catch (fetchError) {
         if (fetchError.name !== 'CanceledError') {
           setError('Unable to load dashboard data right now.')
