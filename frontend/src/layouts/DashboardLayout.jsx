@@ -1,39 +1,84 @@
 import {
+  BellRing,
+  BookOpenText,
+  ChevronDown,
+  ChevronUp,
   Calculator,
   CalendarDays,
   ClipboardCheck,
+  FileCheck2,
   LayoutDashboard,
   LogOut,
-  BookOpenText,
+  Megaphone,
+  ScrollText,
+  ShieldCheck,
   UserRoundCog,
+  Users,
   UtensilsCrossed,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { useState } from 'react'
 
 import { useAuth } from '../hooks/useAuth'
 import { cn } from '../lib/cn'
 
-const navItems = [
-  { to: '/dashboard', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/dashboard/attendance', label: 'Attendance', icon: ClipboardCheck },
-  { to: '/dashboard/timetable', label: 'Timetable', icon: CalendarDays },
-  { to: '/dashboard/mess-menu', label: 'Mess Menu', icon: UtensilsCrossed },
-  { to: '/dashboard/readings', label: 'Readings', icon: BookOpenText },
-  { to: '/dashboard/loan-calculator', label: 'Loan Calculator', icon: Calculator },
-  { to: '/dashboard/profile', label: 'Profile', icon: UserRoundCog },
+const navSections = [
+  {
+    key: 'academics',
+    title: 'Academics',
+    items: [
+      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
+      { to: '/dashboard/timetable', label: 'Timetable', icon: CalendarDays },
+      { to: '/dashboard/attendance', label: 'Attendance', icon: ClipboardCheck },
+      { to: '/dashboard/assignments', label: 'Assignments', icon: FileCheck2 },
+      { to: '/dashboard/readings', label: 'Readings', icon: BookOpenText },
+      { to: '/calculator', label: 'Grade Simulator', icon: Calculator },
+    ],
+  },
+  {
+    key: 'campus',
+    title: 'Campus Life',
+    items: [
+      { to: '/dashboard/mess-menu', label: 'Mess Menu', icon: UtensilsCrossed },
+      { to: '/dashboard/noticeboard', label: 'Noticeboard', icon: BellRing },
+      { to: '/sharing', label: 'Campus Sharing', icon: Users },
+      { to: '/dashboard/polls', label: 'Polls', icon: ScrollText },
+    ],
+  },
+  {
+    key: 'admin_tools',
+    title: 'Admin / Tools',
+    items: [
+      { to: '/admin-portal', label: 'CR Portal', icon: Megaphone },
+      { to: '/ipmo', label: 'IPMO Portal', icon: ShieldCheck },
+      { to: '/dashboard/profile', label: 'Profile', icon: UserRoundCog },
+    ],
+  },
 ]
 
 export default function DashboardLayout() {
   const location = useLocation()
   const { user, logout } = useAuth()
+  const [openSections, setOpenSections] = useState({
+    academics: true,
+    campus: true,
+    admin_tools: true,
+  })
+
+  function toggleSection(key) {
+    setOpenSections((current) => ({
+      ...current,
+      [key]: !current[key],
+    }))
+  }
 
   return (
     <div className="relative min-h-screen bg-hero-mesh">
       <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(255,255,255,0.75)_0%,rgba(248,250,252,0.95)_45%,rgba(248,250,252,1)_100%)]" />
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-[1400px] gap-6 px-4 py-6 sm:px-6 lg:px-8">
-        <aside className="sticky top-6 hidden h-[calc(100vh-3rem)] w-72 shrink-0 flex-col justify-between rounded-3xl bg-iim-blue p-6 shadow-soft lg:flex">
+        <aside className="custom-scrollbar sticky top-0 hidden h-screen w-72 shrink-0 flex-col justify-between overflow-y-auto overflow-x-hidden rounded-3xl bg-iim-blue p-6 shadow-soft lg:flex">
           <div>
             <div className="mb-10">
               <p className="text-xs font-medium uppercase tracking-[0.25em] text-slate-300">
@@ -42,35 +87,54 @@ export default function DashboardLayout() {
               <h2 className="mt-2 heading-tight text-2xl font-bold text-white">IPM Portal</h2>
             </div>
 
-            <nav className="space-y-2">
-              {navItems.map(({ to, label, icon: Icon, end }) => (
-                <NavLink key={to} to={to} end={end}>
-                  {({ isActive }) => (
-                    <div
-                      className={cn(
-                        'group relative flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200',
-                        isActive
-                          ? 'bg-white/12 text-white'
-                          : 'text-slate-300 hover:bg-white/10 hover:text-white',
-                      )}
+            <nav className="space-y-5">
+              {navSections.map((section) => {
+                const isOpen = Boolean(openSections[section.key])
+                return (
+                  <div key={section.key}>
+                    <button
+                      type="button"
+                      onClick={() => toggleSection(section.key)}
+                      className="mb-2 flex w-full items-center justify-between rounded-xl px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 transition hover:bg-white/10"
                     >
-                      <span
-                        className={cn(
-                          'absolute bottom-2 left-0 top-2 w-1 rounded-r-full transition-colors duration-200',
-                          isActive ? 'bg-iim-gold' : 'bg-transparent',
-                        )}
-                      />
-                      <Icon
-                        className={cn(
-                          'h-4 w-4 transition-colors',
-                          isActive ? 'text-white' : 'text-slate-400 group-hover:text-white',
-                        )}
-                      />
-                      <span>{label}</span>
-                    </div>
-                  )}
-                </NavLink>
-              ))}
+                      <span>{section.title}</span>
+                      {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </button>
+                    {isOpen ? (
+                      <div className="space-y-2">
+                        {section.items.map(({ to, label, icon: Icon, end }) => (
+                          <NavLink key={to} to={to} end={end}>
+                            {({ isActive }) => (
+                              <div
+                                className={cn(
+                                  'group relative flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200',
+                                  isActive
+                                    ? 'bg-white/12 text-white'
+                                    : 'text-slate-300 hover:bg-white/10 hover:text-white',
+                                )}
+                              >
+                                <span
+                                  className={cn(
+                                    'absolute bottom-2 left-0 top-2 w-1 rounded-r-full transition-colors duration-200',
+                                    isActive ? 'bg-iim-gold' : 'bg-transparent',
+                                  )}
+                                />
+                                <Icon
+                                  className={cn(
+                                    'h-4 w-4 transition-colors',
+                                    isActive ? 'text-white' : 'text-slate-400 group-hover:text-white',
+                                  )}
+                                />
+                                <span>{label}</span>
+                              </div>
+                            )}
+                          </NavLink>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })}
             </nav>
           </div>
 

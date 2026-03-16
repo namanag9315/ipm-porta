@@ -15,12 +15,16 @@ from django.utils import timezone
 
 from academic_core.models import (
     AttendanceRecord,
+    Batch,
     ClassSession,
     Course,
     MessMenu,
     Student,
     StudentCourse,
+    TermSettings,
 )
+from academic_core.utils import extract_sheet_id
+from academic_core.utils import format_batch_name, infer_batch_code_from_roll_number
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,44 @@ LOCAL_TIMEZONE = ZoneInfo('Asia/Kolkata')
 TIMETABLE_SHEET_NAME = 'Time table'
 MESS_MENU_SHEET_NAME = 'BLD Menu'
 BIRTHDAY_SHEET_NAME = 'Birthdays'
+COURSE_CREDIT_OVERRIDES: dict[str, int] = {
+    'BGS': 4,
+    'IBH': 4,
+    'WD': 2,
+    'POM': 4,
+    'SSL': 2,
+    'MLTP': 2,
+    'LCL': 3,
+    'BE': 2,
+    'LE': 4,
+    'DE': 2,
+    'EBS': 2,
+    'ME': 2,
+    'TP': 2,
+    'HVBG': 2,
+    'IPRM': 2,
+    'SMC': 2,
+    'RT': 2,
+    'ETC': 2,
+    'BPP': 2,
+    'APPS': 3,
+    'DES': 4,
+    'QMP': 2,
+}
+
+
+def _resolve_student_batch(roll_number: str, fallback_batch: Batch | None = None) -> Batch | None:
+    if fallback_batch is not None:
+        return fallback_batch
+
+    inferred_batch_code = infer_batch_code_from_roll_number(roll_number)
+    if inferred_batch_code:
+        resolved_batch, _ = Batch.objects.get_or_create(
+            code=inferred_batch_code,
+            defaults={'name': format_batch_name(inferred_batch_code), 'is_active': True},
+        )
+        return resolved_batch
+    return fallback_batch
 
 
 def _safe_text(value: Any) -> str:
@@ -267,6 +309,17 @@ def _count_attendance_marks(values: list[Any]) -> tuple[int, int, int]:
     return p_count, a_count, l_count
 
 
+def _infer_credits_from_total_delivered(total_delivered: int) -> int:
+    delivered = int(total_delivered or 0)
+    if delivered <= 0:
+        return 0
+    if delivered <= 10:
+        return 2
+    if delivered <= 15:
+        return 3
+    return 4
+
+
 def _has_attendance_markers(
     sheet_data: list[list[Any]],
     header_index: int,
@@ -365,7 +418,7 @@ def _preprocess_timetable_rows(raw_rows: list[Any]) -> list[dict[str, Any]]:
     return output
 
 
-def parse_timetable(sheet_data: list[dict[str, Any]]) -> dict[str, int]:
+def parse_timetable(sheet_data: list[dict[str, Any]], *, batch: Batch | None = None) -> dict[str, int]:
     stats = {'created': 0, 'deleted': 0, 'skipped': 0, 'errors': 0}
     if not isinstance(sheet_data, list):
         return stats
@@ -430,6 +483,7 @@ def parse_timetable(sheet_data: list[dict[str, Any]]) -> dict[str, int]:
 
             sessions_to_create.append(
                 ClassSession(
+                    batch=batch,
                     date=parsed_date,
                     start_time=start_time,
                     end_time=end_time,
@@ -445,7 +499,8 @@ def parse_timetable(sheet_data: list[dict[str, Any]]) -> dict[str, int]:
             logger.exception('Error while parsing timetable row.')
 
     with transaction.atomic():
-        deleted_count, _ = ClassSession.objects.all().delete()
+        session_qs = ClassSession.objects.filter(batch=batch) if batch else ClassSession.objects.all()
+        deleted_count, _ = session_qs.delete()
         if sessions_to_create:
             ClassSession.objects.bulk_create(sessions_to_create, batch_size=500)
 
@@ -456,6 +511,8 @@ def parse_timetable(sheet_data: list[dict[str, Any]]) -> dict[str, int]:
 
 def parse_consolidated_attendance_sheet(
     json_payload: dict[str, list[list[Any]]],
+    *,
+    batch: Batch | None = None,
 ) -> dict[str, int]:
     stats = {
         'sheet_found': 0,
@@ -507,8 +564,10 @@ def parse_consolidated_attendance_sheet(
             student_name = _safe_text(_cell_value(row, name_column)) or roll_number
             email = _valid_or_placeholder_email(_cell_value(row, email_column), roll_number)
             section = _normalize_section(_cell_value(row, section_column), fallback='A')
+            student_batch = _resolve_student_batch(roll_number, fallback_batch=batch)
 
             defaults = {
+                'batch': student_batch,
                 'name': student_name[:100],
                 'section': section,
                 'email': email,
@@ -536,6 +595,9 @@ def parse_consolidated_attendance_sheet(
             if student.name != student_name[:100]:
                 student.name = student_name[:100]
                 update_fields.append('name')
+            if student_batch and student.batch_id != student_batch.code:
+                student.batch = student_batch
+                update_fields.append('batch')
             if section and student.section != section:
                 student.section = section
                 update_fields.append('section')
@@ -555,7 +617,11 @@ def parse_consolidated_attendance_sheet(
     return stats
 
 
-def parse_attendance(json_payload: dict[str, list[list[Any]]]) -> dict[str, int]:
+def parse_attendance(
+    json_payload: dict[str, list[list[Any]]],
+    *,
+    batch: Batch | None = None,
+) -> dict[str, int]:
     stats = {
         'sheets_processed': 0,
         'students_created': 0,
@@ -600,16 +666,28 @@ def parse_attendance(json_payload: dict[str, list[list[Any]]]) -> dict[str, int]
         if not course_code:
             continue
         normalized_course_name = _normalize_course_name_from_sheet_name(sheet_name)
+        normalized_course_code = course_code.upper()
+        configured_credits = COURSE_CREDIT_OVERRIDES.get(normalized_course_code, 0)
 
         course, _ = Course.objects.get_or_create(
             code=course_code,
-            defaults={'name': normalized_course_name[:150], 'credits': 0},
+            defaults={
+                'name': normalized_course_name[:150],
+                'credits': configured_credits,
+            },
         )
+        course_update_fields: list[str] = []
         if normalized_course_name and course.name != normalized_course_name[:150]:
             course.name = normalized_course_name[:150]
-            course.save(update_fields=['name'])
+            course_update_fields.append('name')
+        if configured_credits > 0 and course.credits != configured_credits:
+            course.credits = configured_credits
+            course_update_fields.append('credits')
+        if course_update_fields:
+            course.save(update_fields=course_update_fields)
         valid_course_codes.add(course.code)
         section = _infer_section_from_sheet_name(sheet_name)
+        max_delivered_for_course = 0
 
         for row in sheet_data[header_index + 1 :]:
             try:
@@ -631,10 +709,13 @@ def parse_attendance(json_payload: dict[str, list[list[Any]]]) -> dict[str, int]
                 total_delivered = present_count + absent_count + late_count
                 total_attended = present_count
                 percentage = (total_attended / total_delivered * 100.0) if total_delivered else 0.0
+                max_delivered_for_course = max(max_delivered_for_course, total_delivered)
+                student_batch = _resolve_student_batch(roll_number, fallback_batch=batch)
 
                 student, created = Student.objects.get_or_create(
                     roll_number=roll_number,
                     defaults={
+                        'batch': student_batch,
                         'name': student_name[:100],
                         'section': section or 'A',
                         'email': _placeholder_email(roll_number),
@@ -647,6 +728,9 @@ def parse_attendance(json_payload: dict[str, list[list[Any]]]) -> dict[str, int]
                     if student_name and student.name != student_name[:100]:
                         student.name = student_name[:100]
                         update_fields.append('name')
+                    if student_batch and student.batch_id != student_batch.code:
+                        student.batch = student_batch
+                        update_fields.append('batch')
                     if section and student.section != section:
                         student.section = section
                         update_fields.append('section')
@@ -656,17 +740,22 @@ def parse_attendance(json_payload: dict[str, list[list[Any]]]) -> dict[str, int]
                     if update_fields:
                         student.save(update_fields=update_fields)
 
-                _, mapping_created = StudentCourse.objects.get_or_create(
+                mapping, mapping_created = StudentCourse.objects.get_or_create(
                     student=student,
                     course=course,
+                    defaults={'batch': student_batch or batch},
                 )
                 if mapping_created:
                     stats['student_course_mappings_created'] += 1
+                elif (student_batch or batch) and mapping.batch_id != (student_batch or batch).code:
+                    mapping.batch = student_batch or batch
+                    mapping.save(update_fields=['batch'])
 
                 AttendanceRecord.objects.update_or_create(
                     student=student,
                     course=course,
                     defaults={
+                        'batch': batch,
                         'total_delivered': total_delivered,
                         'total_attended': total_attended,
                         'percentage': round(percentage, 2),
@@ -680,14 +769,27 @@ def parse_attendance(json_payload: dict[str, list[list[Any]]]) -> dict[str, int]
                     sheet_name,
                 )
 
+        inferred_credits = _infer_credits_from_total_delivered(max_delivered_for_course)
+        should_update_credits = (
+            configured_credits <= 0
+            and
+            inferred_credits > 0
+            and (course.credits <= 0 or inferred_credits > course.credits)
+        )
+        if should_update_credits:
+            course.credits = inferred_credits
+            course.save(update_fields=['credits'])
+
         stats['sheets_processed'] += 1
 
     if valid_course_codes:
+        attendance_scope = AttendanceRecord.objects.filter(batch=batch) if batch else AttendanceRecord.objects.all()
+        mapping_scope = StudentCourse.objects.filter(batch=batch) if batch else StudentCourse.objects.all()
         with transaction.atomic():
-            stale_attendance_deleted, _ = AttendanceRecord.objects.exclude(
+            stale_attendance_deleted, _ = attendance_scope.exclude(
                 course_id__in=valid_course_codes
             ).delete()
-            stale_mappings_deleted, _ = StudentCourse.objects.exclude(
+            stale_mappings_deleted, _ = mapping_scope.exclude(
                 course_id__in=valid_course_codes
             ).delete()
         stats['stale_records_removed'] = stale_attendance_deleted + stale_mappings_deleted
@@ -695,7 +797,7 @@ def parse_attendance(json_payload: dict[str, list[list[Any]]]) -> dict[str, int]
     return stats
 
 
-def parse_mess_menu(sheet_data: list[list[Any]]) -> dict[str, int]:
+def parse_mess_menu(sheet_data: list[list[Any]], *, batch: Batch | None = None) -> dict[str, int]:
     stats = {'created': 0, 'deleted': 0, 'errors': 0}
     if not isinstance(sheet_data, list) or len(sheet_data) <= 5:
         return stats
@@ -768,6 +870,7 @@ def parse_mess_menu(sheet_data: list[list[Any]]) -> dict[str, int]:
 
                 menu_rows.append(
                     MessMenu(
+                        batch=batch,
                         date=menu_date,
                         category=effective_category[:50],
                         item_name=item_name[:100],
@@ -778,7 +881,8 @@ def parse_mess_menu(sheet_data: list[list[Any]]) -> dict[str, int]:
                 logger.exception('Error while parsing BLD Menu cell.')
 
     with transaction.atomic():
-        deleted_count, _ = MessMenu.objects.filter(date__gte=timezone.localdate()).delete()
+        menu_scope = MessMenu.objects.filter(batch=batch) if batch else MessMenu.objects.all()
+        deleted_count, _ = menu_scope.filter(date__gte=timezone.localdate()).delete()
         if menu_rows:
             MessMenu.objects.bulk_create(menu_rows, batch_size=500)
 
@@ -837,7 +941,7 @@ def _birthday_sheet_to_rows(sheet_data: list[Any]) -> list[dict[str, Any]]:
     return parsed_rows
 
 
-def parse_birthdays(sheet_data: list[Any]) -> dict[str, int]:
+def parse_birthdays(sheet_data: list[Any], *, batch: Batch | None = None) -> dict[str, int]:
     stats = {'updated': 0, 'skipped': 0, 'errors': 0}
     if not isinstance(sheet_data, list):
         return stats
@@ -846,9 +950,10 @@ def parse_birthdays(sheet_data: list[Any]) -> dict[str, int]:
     if not rows:
         return stats
 
+    student_scope = Student.objects.filter(batch=batch) if batch else Student.objects.all()
     students_by_roll = {
         student.roll_number.upper(): student
-        for student in Student.objects.only('roll_number', 'name', 'date_of_birth')
+        for student in student_scope.only('roll_number', 'name', 'date_of_birth')
     }
     students_by_name: dict[str, list[Student]] = {}
     for student in students_by_roll.values():
@@ -1034,17 +1139,30 @@ def _fetch_payload_from_url(
     return _extract_sheet_mapping(raw_payload, fallback_sheet_name=fallback_sheet_name)
 
 
-def _fetch_payload_by_sheet_ids() -> dict[str, list[list[Any]]]:
+def _fetch_payload_by_sheet_ids(term_settings: TermSettings) -> dict[str, list[list[Any]]]:
     base_url = settings.GAS_BRIDGE_BASE_URL or settings.GAS_BRIDGE_URL
     if not base_url:
         return {}
 
+    timetable_sheet_id = extract_sheet_id(term_settings.timetable_sheet_url)
+    attendance_sheet_id = extract_sheet_id(term_settings.attendance_sheet_url)
+    mess_menu_sheet_id = (
+        extract_sheet_id(term_settings.mess_menu_sheet_url)
+        or settings.MESS_MENU_SHEET_ID
+    )
+    birthday_sheet_id = (
+        extract_sheet_id(term_settings.birthday_sheet_url)
+        or settings.BIRTHDAY_SHEET_ID
+    )
+
     sources = [
-        (settings.TIMETABLE_SHEET_ID, TIMETABLE_SHEET_NAME),
-        (settings.ATTENDANCE_SHEET_ID, None),
-        (settings.MESS_MENU_SHEET_ID, MESS_MENU_SHEET_NAME),
-        (settings.BIRTHDAY_SHEET_ID, BIRTHDAY_SHEET_NAME),
+        (timetable_sheet_id, TIMETABLE_SHEET_NAME),
+        (attendance_sheet_id, None),
+        (mess_menu_sheet_id, MESS_MENU_SHEET_NAME),
+        (birthday_sheet_id, BIRTHDAY_SHEET_NAME),
     ]
+    if not any(spreadsheet_id for spreadsheet_id, _ in sources):
+        raise ValueError('No sheet IDs configured for this batch.')
 
     merged_payload: dict[str, list[list[Any]]] = {}
     source_errors: list[str] = []
@@ -1087,7 +1205,10 @@ def _fetch_payload_by_sheet_ids() -> dict[str, list[list[Any]]]:
     return {}
 
 
-def _fetch_google_payload() -> dict[str, list[list[Any]]]:
+def _fetch_google_payload(term_settings: TermSettings | None = None) -> dict[str, list[list[Any]]]:
+    if term_settings is not None:
+        return _fetch_payload_by_sheet_ids(term_settings)
+
     errors: list[str] = []
 
     if settings.GAS_BRIDGE_URL:
@@ -1099,15 +1220,21 @@ def _fetch_google_payload() -> dict[str, list[list[Any]]]:
         except Exception as exc:
             errors.append(f'direct_url: {exc}')
 
-    has_sheet_ids = bool(
-        settings.TIMETABLE_SHEET_ID
-        or settings.ATTENDANCE_SHEET_ID
-        or settings.MESS_MENU_SHEET_ID
-        or settings.BIRTHDAY_SHEET_ID
+    settings_obj = term_settings or TermSettings.objects.order_by('-updated_at').first()
+    has_sheet_ids = bool(extract_sheet_id(settings_obj.timetable_sheet_url) if settings_obj else '')
+    has_sheet_ids = has_sheet_ids or bool(
+        extract_sheet_id(settings_obj.attendance_sheet_url) if settings_obj else ''
     )
+    has_sheet_ids = has_sheet_ids or bool(
+        extract_sheet_id(settings_obj.mess_menu_sheet_url) if settings_obj else ''
+    )
+    has_sheet_ids = has_sheet_ids or bool(
+        extract_sheet_id(settings_obj.birthday_sheet_url) if settings_obj else ''
+    )
+    has_sheet_ids = has_sheet_ids or bool(settings.MESS_MENU_SHEET_ID or settings.BIRTHDAY_SHEET_ID)
     if (settings.GAS_BRIDGE_BASE_URL or settings.GAS_BRIDGE_URL) and has_sheet_ids:
         try:
-            payload = _fetch_payload_by_sheet_ids()
+            payload = _fetch_payload_by_sheet_ids(settings_obj) if settings_obj else {}
             if payload:
                 return payload
             errors.append('sheet_id_fetch: empty payload')
@@ -1120,30 +1247,97 @@ def _fetch_google_payload() -> dict[str, list[list[Any]]]:
     raise ValueError('GAS bridge configuration is missing.')
 
 
-@shared_task(name='academic_core.sync_google_sheets_data')
-def sync_google_sheets_data() -> dict[str, Any]:
-    result: dict[str, Any] = {
+def _initial_sync_stats() -> dict[str, Any]:
+    return {
         'status': 'failed',
-        'consolidated': {},
-        'timetable': {},
-        'attendance': {},
-        'mess_menu': {},
-        'birthdays': {},
+        'consolidated': {'sheet_found': 0, 'users_created': 0, 'users_updated': 0, 'skipped': 0, 'errors': 0},
+        'timetable': {'created': 0, 'deleted': 0, 'skipped': 0, 'errors': 0},
+        'attendance': {
+            'sheets_processed': 0,
+            'students_created': 0,
+            'records_upserted': 0,
+            'student_course_mappings_created': 0,
+            'stale_records_removed': 0,
+            'errors': 0,
+        },
+        'mess_menu': {'created': 0, 'deleted': 0, 'errors': 0},
+        'birthdays': {'updated': 0, 'skipped': 0, 'errors': 0},
         'errors': [],
     }
 
-    try:
-        payload = _fetch_google_payload()
-    except Exception as exc:
-        logger.exception('Failed to fetch data from GAS bridge.')
-        result['errors'].append(f'fetch_failed: {exc}')
+
+def _merge_stat_bucket(aggregate: dict[str, Any], section: str, stats: dict[str, Any]) -> None:
+    bucket = aggregate.get(section)
+    if not isinstance(bucket, dict):
+        aggregate[section] = dict(stats)
+        return
+
+    for key, value in stats.items():
+        if isinstance(value, (int, float)):
+            bucket[key] = bucket.get(key, 0) + value
+        else:
+            bucket[key] = value
+
+
+@shared_task(name='academic_core.sync_google_sheets_data')
+def sync_google_sheets_data(batch_code: str | None = None) -> dict[str, Any]:
+    result: dict[str, Any] = _initial_sync_stats()
+    result['batches'] = {}
+
+    term_settings_qs = TermSettings.objects.select_related('batch').order_by('batch__code')
+    if batch_code:
+        term_settings_qs = term_settings_qs.filter(batch__code=batch_code)
+    else:
+        term_settings_qs = term_settings_qs.filter(batch__is_active=True)
+    term_settings_list = list(term_settings_qs)
+
+    if not term_settings_list:
+        try:
+            payload = _fetch_google_payload()
+        except Exception as exc:
+            logger.exception('Failed to fetch data from GAS bridge.')
+            result['errors'].append(f'fetch_failed: {exc}')
+            return result
+        term_settings_list = []
+        fallback_batch = Batch.objects.filter(is_active=True).order_by('code').first()
+        result['batches']['default'] = _sync_payload_for_batch(payload, fallback_batch)
+        for section in ('consolidated', 'timetable', 'attendance', 'mess_menu', 'birthdays'):
+            _merge_stat_bucket(result, section, result['batches']['default'].get(section, {}))
+        result['errors'].extend(result['batches']['default'].get('errors', []))
+        result['status'] = 'completed_with_errors' if result['errors'] else 'completed'
         return result
 
+    for settings_obj in term_settings_list:
+        batch = settings_obj.batch
+        batch_key = batch.code if batch else 'default'
+        try:
+            payload = _fetch_google_payload(settings_obj)
+        except Exception as exc:
+            logger.exception('Failed to fetch data from GAS bridge for batch %s.', batch_key)
+            batch_result = _initial_sync_stats()
+            batch_result['errors'].append(f'fetch_failed: {exc}')
+            result['batches'][batch_key] = batch_result
+            result['errors'].append(f'[{batch_key}] fetch_failed: {exc}')
+            continue
+
+        batch_result = _sync_payload_for_batch(payload, batch)
+        result['batches'][batch_key] = batch_result
+        for section in ('consolidated', 'timetable', 'attendance', 'mess_menu', 'birthdays'):
+            _merge_stat_bucket(result, section, batch_result.get(section, {}))
+        result['errors'].extend([f'[{batch_key}] {error}' for error in batch_result.get('errors', [])])
+
+    result['status'] = 'completed_with_errors' if result['errors'] else 'completed'
+    return result
+
+
+def _sync_payload_for_batch(payload: dict[str, list[list[Any]]], batch: Batch | None) -> dict[str, Any]:
+    batch_result: dict[str, Any] = _initial_sync_stats()
+
     try:
-        result['consolidated'] = parse_consolidated_attendance_sheet(payload)
+        batch_result['consolidated'] = parse_consolidated_attendance_sheet(payload, batch=batch)
     except Exception as exc:
         logger.exception('parse_consolidated_attendance_sheet failed.')
-        result['errors'].append(f'parse_consolidated_failed: {exc}')
+        batch_result['errors'].append(f'parse_consolidated_failed: {exc}')
 
     try:
         timetable_raw = (
@@ -1157,16 +1351,16 @@ def sync_google_sheets_data() -> dict[str, Any]:
             timetable_payload = _preprocess_timetable_rows(timetable_raw)
         else:
             timetable_payload = timetable_raw
-        result['timetable'] = parse_timetable(timetable_payload)
+        batch_result['timetable'] = parse_timetable(timetable_payload, batch=batch)
     except Exception as exc:
         logger.exception('parse_timetable failed.')
-        result['errors'].append(f'parse_timetable_failed: {exc}')
+        batch_result['errors'].append(f'parse_timetable_failed: {exc}')
 
     try:
-        result['attendance'] = parse_attendance(payload)
+        batch_result['attendance'] = parse_attendance(payload, batch=batch)
     except Exception as exc:
         logger.exception('parse_attendance failed.')
-        result['errors'].append(f'parse_attendance_failed: {exc}')
+        batch_result['errors'].append(f'parse_attendance_failed: {exc}')
 
     try:
         mess_menu_payload = (
@@ -1175,17 +1369,17 @@ def sync_google_sheets_data() -> dict[str, Any]:
             or payload.get('BLD menu')
             or []
         )
-        result['mess_menu'] = parse_mess_menu(mess_menu_payload)
+        batch_result['mess_menu'] = parse_mess_menu(mess_menu_payload, batch=batch)
     except Exception as exc:
         logger.exception('parse_mess_menu failed.')
-        result['errors'].append(f'parse_mess_menu_failed: {exc}')
+        batch_result['errors'].append(f'parse_mess_menu_failed: {exc}')
 
     try:
         birthday_payload = _find_birthday_sheet_data(payload)
-        result['birthdays'] = parse_birthdays(birthday_payload)
+        batch_result['birthdays'] = parse_birthdays(birthday_payload, batch=batch)
     except Exception as exc:
         logger.exception('parse_birthdays failed.')
-        result['errors'].append(f'parse_birthdays_failed: {exc}')
+        batch_result['errors'].append(f'parse_birthdays_failed: {exc}')
 
-    result['status'] = 'completed_with_errors' if result['errors'] else 'completed'
-    return result
+    batch_result['status'] = 'completed_with_errors' if batch_result['errors'] else 'completed'
+    return batch_result

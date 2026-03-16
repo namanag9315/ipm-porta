@@ -9,10 +9,11 @@ import requests
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db.models import Max, Q
+from django.db import IntegrityError, transaction
+from django.db.models import Count, Max, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_datetime, parse_time
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, parser_classes
@@ -23,26 +24,47 @@ from academic_core.models import (
     Announcement,
     Assignment,
     AttendanceRecord,
+    AttendanceWaiverRequest,
+    Batch,
+    BlinkitPool,
+    CabPool,
     ClassSession,
     Course,
     CourseMaterial,
+    GradeDocument,
     MessMenu,
+    Poll,
+    PollOption,
+    PollVote,
+    SellPost,
     Student,
     StudentCourse,
+    TermSettings,
 )
+from academic_core.bus_schedule import build_bus_schedule_payload
 from academic_core.serializers import (
     AnnouncementSerializer,
     AssignmentSerializer,
     AttendanceSerializer,
+    AttendanceWaiverRequestSerializer,
+    BatchSerializer,
+    BlinkitPoolSerializer,
+    CabPoolSerializer,
     ClassSessionSerializer,
     CourseMaterialSerializer,
     CourseSerializer,
+    GradeDocumentSerializer,
     MessMenuSerializer,
+    PollSerializer,
+    SellPostSerializer,
     StudentSerializer,
+    TermSettingsSerializer,
 )
 from academic_core.tasks import sync_google_sheets_data
+from academic_core.utils import format_batch_name, infer_batch_code_from_roll_number
 
 LOCAL_TIMEZONE = ZoneInfo('Asia/Kolkata')
+DEFAULT_BATCH_CODE = str(max(2000, timezone.now().astimezone(LOCAL_TIMEZONE).year - 3))
 
 
 def _parse_optional_datetime(value: object) -> datetime.datetime | None:
@@ -75,6 +97,70 @@ def _parse_sort_order(value: object, default: int = 0) -> int:
     return max(0, parsed)
 
 
+def _normalize_batch_code(value: object) -> str:
+    text = str(value or '').strip().upper()
+    if not text:
+        return ''
+    inferred_year = infer_batch_code_from_roll_number(text)
+    if inferred_year:
+        return inferred_year
+    return text
+
+
+def _get_or_create_batch(batch_code: str | None = None) -> Batch:
+    code = _normalize_batch_code(batch_code) or DEFAULT_BATCH_CODE
+    batch, _ = Batch.objects.get_or_create(
+        code=code,
+        defaults={'name': format_batch_name(code), 'is_active': True},
+    )
+    return batch
+
+
+def _batch_from_request(request, *, required: bool = False) -> tuple[Batch | None, Response | None]:
+    batch_code = (
+        request.query_params.get('batch_code')
+        or request.data.get('batch_code')
+        or request.headers.get('X-Batch-Code')
+    )
+    normalized_code = _normalize_batch_code(batch_code)
+
+    if not normalized_code:
+        roll_hint = (
+            request.headers.get('X-Student-Roll-Number')
+            or request.data.get('roll_number')
+            or request.query_params.get('roll_number')
+        )
+        inferred_code = infer_batch_code_from_roll_number(str(roll_hint or ''))
+        if inferred_code:
+            return _get_or_create_batch(inferred_code), None
+
+        if required:
+            return (
+                None,
+                Response({'detail': 'batch_code is required.'}, status=status.HTTP_400_BAD_REQUEST),
+            )
+        active_batches = Batch.objects.filter(is_active=True)
+        batch = (
+            active_batches.filter(code__regex=r'^20\d{2}$').order_by('code').first()
+            or active_batches.order_by('code').first()
+            or _get_or_create_batch()
+        )
+        return batch, None
+
+    batch = Batch.objects.filter(code=normalized_code).first()
+    if not batch:
+        if (
+            (normalized_code.isdigit() and len(normalized_code) == 4)
+            or re.fullmatch(r'IPM0?[1-9]', normalized_code)
+        ):
+            return _get_or_create_batch(normalized_code), None
+        return (
+            None,
+            Response({'detail': f'Unknown batch_code: {normalized_code}'}, status=status.HTTP_400_BAD_REQUEST),
+        )
+    return batch, None
+
+
 def _admin_token_from_request(request) -> Token | None:
     auth_header = str(request.headers.get('Authorization', ''))
     prefix, _, token_key = auth_header.partition(' ')
@@ -101,6 +187,24 @@ def _require_admin(request) -> tuple[object | None, Token | None, Response | Non
             ),
         )
     return token.user, token, None
+
+
+def _require_ipmo_admin(request) -> tuple[object | None, Token | None, Response | None]:
+    admin_user, token, error_response = _require_admin(request)
+    if error_response:
+        return None, None, error_response
+
+    if not admin_user.is_superuser:
+        return (
+            None,
+            None,
+            Response(
+                {'detail': 'IPMO permission required.'},
+                status=status.HTTP_403_FORBIDDEN,
+            ),
+        )
+
+    return admin_user, token, None
 
 
 def _extract_json_payload(text: str) -> object | None:
@@ -255,6 +359,144 @@ def _reorder_materials_with_ai(materials: list[CourseMaterial]) -> list[int]:
     return ordered_unique
 
 
+def _generate_gemini_draft(prompt: str) -> str:
+    api_key = os.getenv('GEMINI_API_KEY', '').strip()
+    if not api_key:
+        raise ValueError('GEMINI_API_KEY is not configured.')
+
+    try:
+        import google.generativeai as genai
+    except Exception as exc:
+        raise RuntimeError('google-generativeai is not installed.') from exc
+
+    model_name = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip() or 'gemini-1.5-flash'
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
+    response = model.generate_content(
+        (
+            'Write a professionally formatted, polite, and clear announcement draft for students. '
+            'Do not add markdown headings. Keep it concise but complete.\n\n'
+            f'Request:\n{prompt.strip()}'
+        )
+    )
+    text = str(getattr(response, 'text', '') or '').strip()
+    if text:
+        return text
+    raise RuntimeError('Gemini returned an empty draft.')
+
+
+def _parse_iso_date(value: object) -> datetime.date | None:
+    text = str(value or '').strip()
+    if not text:
+        return None
+    try:
+        return datetime.date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _resolve_assignment_deadline(request) -> tuple[datetime.date | None, datetime.time | None, Response | None]:
+    due_at_raw = str(request.data.get('due_at', '')).strip()
+    if due_at_raw:
+        due_at = _parse_optional_datetime(due_at_raw)
+        if due_at is None:
+            return (
+                None,
+                None,
+                Response(
+                    {'detail': 'Invalid due_at format. Use ISO datetime.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+        localized_due = due_at.astimezone(LOCAL_TIMEZONE)
+        due_time = localized_due.time().replace(second=0, microsecond=0)
+        return localized_due.date(), due_time, None
+
+    due_date = _parse_iso_date(request.data.get('due_date'))
+    if due_date is None:
+        return (
+            None,
+            None,
+            Response(
+                {'detail': 'due_date is required and must be YYYY-MM-DD.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        )
+
+    due_time_raw = str(request.data.get('due_time', '')).strip()
+    if not due_time_raw:
+        return due_date, None, None
+
+    due_time = parse_time(due_time_raw)
+    if due_time is None:
+        return (
+            None,
+            None,
+            Response(
+                {'detail': 'Invalid due_time format. Use HH:MM.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        )
+    due_time = due_time.replace(second=0, microsecond=0)
+    return due_date, due_time, None
+
+
+def _poll_visible_for_student(poll: Poll, student: Student, enrolled_course_ids: set[str]) -> bool:
+    if poll.target_type == 'ALL':
+        return True
+    if poll.target_type == 'SECTION_A':
+        return student.section == 'A'
+    if poll.target_type == 'SECTION_B':
+        return student.section == 'B'
+    if poll.target_type == 'COURSE':
+        return bool(poll.target_course_id and poll.target_course_id in enrolled_course_ids)
+    return False
+
+
+def _serialize_poll_for_student(poll: Poll, student: Student) -> dict[str, object]:
+    student_vote = poll.votes.filter(student=student).select_related('option').first()
+    vote_counts = {
+        row['option_id']: row['count']
+        for row in poll.votes.values('option_id').annotate(count=Count('id'))
+    }
+    total_votes = sum(vote_counts.values())
+
+    options_payload: list[dict[str, object]] = []
+    for option in poll.options.all().order_by('id'):
+        count = vote_counts.get(option.id, 0)
+        percentage = round((count / total_votes) * 100, 1) if total_votes else 0.0
+        options_payload.append(
+            {
+                'id': option.id,
+                'text': option.text,
+                'vote_count': count if student_vote else None,
+                'percentage': percentage if student_vote else None,
+            }
+        )
+
+    return {
+        'id': poll.id,
+        'title': poll.title,
+        'description': poll.description,
+        'target_type': poll.target_type,
+        'target_course': (
+            {
+                'code': poll.target_course.code,
+                'name': poll.target_course.name,
+            }
+            if poll.target_course
+            else None
+        ),
+        'created_by': poll.created_by,
+        'created_at': poll.created_at,
+        'expires_at': poll.expires_at,
+        'has_voted': bool(student_vote),
+        'student_vote_option_id': student_vote.option_id if student_vote else None,
+        'total_votes': total_votes if student_vote else None,
+        'options': options_payload,
+    }
+
+
 def _enrolled_course_ids(student: Student) -> set[str]:
     attendance_course_ids = set(
         AttendanceRecord.objects.filter(student=student).values_list('course_id', flat=True)
@@ -265,13 +507,271 @@ def _enrolled_course_ids(student: Student) -> set[str]:
     return attendance_course_ids | mapped_course_ids
 
 
+def _student_is_mapped_to_course(student: Student, course: Course) -> bool:
+    return AttendanceRecord.objects.filter(student=student, course=course).exists() or StudentCourse.objects.filter(
+        student=student,
+        course=course,
+    ).exists()
+
+
+def _student_from_request(request) -> tuple[Student | None, Response | None]:
+    roll_number = str(
+        request.headers.get('X-Student-Roll-Number')
+        or request.data.get('roll_number')
+        or request.query_params.get('roll_number')
+        or ''
+    ).strip().upper()
+
+    if not roll_number:
+        return (
+            None,
+            Response(
+                {'detail': 'Student roll number is required in X-Student-Roll-Number header.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        )
+
+    student = Student.objects.filter(roll_number=roll_number).first()
+    if student is None:
+        return (
+            None,
+            Response(
+                {'detail': 'Student not found for the provided roll number.'},
+                status=status.HTTP_404_NOT_FOUND,
+            ),
+        )
+
+    return student, None
+
+
+def _ensure_post_owner(student: Student, creator: Student) -> Response | None:
+    if student.roll_number != creator.roll_number:
+        return Response(
+            {'detail': 'Only the post creator can modify this post.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+@api_view(['GET', 'POST'])
+def get_or_create_cab_pools(request) -> Response:
+    if request.method == 'GET':
+        today = timezone.now().astimezone(LOCAL_TIMEZONE).date()
+        pools = (
+            CabPool.objects.select_related('creator')
+            .filter(is_active=True, departure_date__gte=today)
+            .order_by('-created_at')
+        )
+        serializer = CabPoolSerializer(pools, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    serializer = CabPoolSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    available_seats = int(serializer.validated_data.get('available_seats') or 0)
+    if available_seats <= 0:
+        return Response(
+            {'available_seats': ['Available seats must be greater than zero.']},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    pool = serializer.save(creator=student, is_active=True)
+    response_serializer = CabPoolSerializer(pool)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def update_or_delete_cab_pool(request, pool_id: int) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    pool = get_object_or_404(CabPool, id=pool_id)
+    permission_error = _ensure_post_owner(student, pool.creator)
+    if permission_error:
+        return permission_error
+
+    if request.method == 'DELETE':
+        pool.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    action = str(request.data.get('action', '')).strip().lower()
+    if action == 'fulfill' or request.data.get('is_active') is False:
+        pool.is_active = False
+        pool.save(update_fields=['is_active'])
+    serializer = CabPoolSerializer(pool)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+def get_or_create_blinkit_pools(request) -> Response:
+    if request.method == 'GET':
+        pools = (
+            BlinkitPool.objects.select_related('creator')
+            .filter(is_active=True)
+            .order_by('-created_at')
+        )
+        serializer = BlinkitPoolSerializer(pools, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    serializer = BlinkitPoolSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    pool = serializer.save(creator=student, is_active=True)
+    response_serializer = BlinkitPoolSerializer(pool)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def update_or_delete_blinkit_pool(request, pool_id: int) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    pool = get_object_or_404(BlinkitPool, id=pool_id)
+    permission_error = _ensure_post_owner(student, pool.creator)
+    if permission_error:
+        return permission_error
+
+    if request.method == 'DELETE':
+        pool.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    action = str(request.data.get('action', '')).strip().lower()
+    if action == 'fulfill' or request.data.get('is_active') is False:
+        pool.is_active = False
+        pool.save(update_fields=['is_active'])
+    serializer = BlinkitPoolSerializer(pool)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+def get_or_create_sell_posts(request) -> Response:
+    if request.method == 'GET':
+        posts = (
+            SellPost.objects.select_related('creator')
+            .filter(is_active=True)
+            .order_by('-created_at')
+        )
+        serializer = SellPostSerializer(posts, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    serializer = SellPostSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    post = serializer.save(creator=student, is_active=True)
+    response_serializer = SellPostSerializer(post)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def update_or_delete_sell_post(request, post_id: int) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    post = get_object_or_404(SellPost, id=post_id)
+    permission_error = _ensure_post_owner(student, post.creator)
+    if permission_error:
+        return permission_error
+
+    if request.method == 'DELETE':
+        post.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    action = str(request.data.get('action', '')).strip().lower()
+    if action == 'fulfill' or request.data.get('is_active') is False:
+        post.is_active = False
+        post.save(update_fields=['is_active'])
+    serializer = SellPostSerializer(post)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 @api_view(['GET'])
 def get_student_attendance(request, roll_number: str) -> Response:
+    student = get_object_or_404(Student, roll_number=roll_number)
     records = AttendanceRecord.objects.select_related('course').filter(
-        student__roll_number=roll_number
+        student=student,
     )
+    if student.batch_id:
+        records = records.filter(batch_id=student.batch_id)
     serializer = AttendanceSerializer(records, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+def get_or_create_attendance_waivers(request, roll_number: str) -> Response:
+    student = get_object_or_404(Student, roll_number=roll_number)
+
+    if request.method == 'GET':
+        waivers = AttendanceWaiverRequest.objects.select_related('course').filter(student=student).order_by(
+            '-submitted_at'
+        )
+        serializer = AttendanceWaiverRequestSerializer(
+            waivers,
+            many=True,
+            context={'request': request},
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    course_code = str(request.data.get('course_code', '')).strip().upper()
+    if not course_code:
+        return Response(
+            {'detail': 'course_code is required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    course = get_object_or_404(Course, code=course_code)
+    if not _student_is_mapped_to_course(student, course):
+        return Response(
+            {'detail': 'This course is not mapped to the selected student.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    supporting_file = request.FILES.get('supporting_file')
+    if supporting_file is None:
+        return Response(
+            {'detail': 'supporting_file is required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    waiver = AttendanceWaiverRequest.objects.create(
+        student=student,
+        course=course,
+        reason=str(request.data.get('reason', '')).strip(),
+        supporting_file=supporting_file,
+    )
+    serializer = AttendanceWaiverRequestSerializer(waiver, context={'request': request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+def get_bus_schedule(request) -> Response:
+    try:
+        payload = build_bus_schedule_payload()
+    except Exception as exc:
+        return Response(
+            {'detail': f'Unable to load bus schedule right now: {exc}'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])
@@ -289,6 +789,12 @@ def login_student(request) -> Response:
     if student is None:
         return Response({'detail': 'Invalid credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
 
+    if not student.batch_id:
+        inferred_batch_code = infer_batch_code_from_roll_number(student.roll_number)
+        if inferred_batch_code:
+            student.batch = _get_or_create_batch(inferred_batch_code)
+            student.save(update_fields=['batch'])
+
     if not student.password:
         student.set_password(f'IIM@{student.roll_number}')
         student.save(update_fields=['password'])
@@ -302,9 +808,11 @@ def login_student(request) -> Response:
             'refresh': secrets.token_urlsafe(48),
             'user': {
                 'roll_number': student.roll_number,
+                'batch_code': student.batch_id or '',
                 'name': student.name,
                 'section': student.section,
                 'email': student.email,
+                'is_ipmo': student.is_ipmo,
             },
         },
         status=status.HTTP_200_OK,
@@ -359,6 +867,7 @@ def admin_run_sync(request) -> Response:
         return error_response
 
     mode = str(request.data.get('mode', 'async')).strip().lower()
+    batch_code = _normalize_batch_code(request.data.get('batch_code'))
     if mode not in {'async', 'sync'}:
         return Response(
             {'detail': 'Invalid mode. Use "async" or "sync".'},
@@ -366,7 +875,7 @@ def admin_run_sync(request) -> Response:
         )
 
     if mode == 'sync':
-        result = sync_google_sheets_data()
+        result = sync_google_sheets_data(batch_code=batch_code or None)
         return Response(
             {
                 'status': 'completed',
@@ -377,7 +886,7 @@ def admin_run_sync(request) -> Response:
         )
 
     try:
-        task = sync_google_sheets_data.delay()
+        task = sync_google_sheets_data.delay(batch_code=batch_code or None)
         return Response(
             {
                 'status': 'queued',
@@ -387,7 +896,7 @@ def admin_run_sync(request) -> Response:
             status=status.HTTP_202_ACCEPTED,
         )
     except Exception as exc:
-        result = sync_google_sheets_data()
+        result = sync_google_sheets_data(batch_code=batch_code or None)
         return Response(
             {
                 'status': 'completed',
@@ -405,6 +914,8 @@ def get_student_timetable(request, roll_number: str) -> Response:
     enrolled_course_ids = _enrolled_course_ids(student)
 
     sessions = ClassSession.objects.select_related('course')
+    if student.batch_id:
+        sessions = sessions.filter(batch_id=student.batch_id)
     if student.section == 'A':
         sessions = sessions.exclude(target_section='B')
     elif student.section == 'B':
@@ -423,6 +934,10 @@ def get_student_timetable(request, roll_number: str) -> Response:
 @api_view(['GET'])
 def get_mess_menu(request) -> Response:
     date_param = request.query_params.get('date')
+    template_fallback = _parse_bool(request.query_params.get('template_fallback'), default=False)
+    batch, batch_error = _batch_from_request(request)
+    if batch_error:
+        return batch_error
     target_date = timezone.now().astimezone(LOCAL_TIMEZONE).date()
 
     if date_param:
@@ -434,27 +949,65 @@ def get_mess_menu(request) -> Response:
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-    menu_items = MessMenu.objects.filter(date=target_date).order_by('category', 'item_name')
-    serializer = MessMenuSerializer(menu_items, many=True)
-    return Response(serializer.data, status=status.HTTP_200_OK)
+    menu_scope = MessMenu.objects.filter(batch=batch)
+    menu_items = menu_scope.filter(date=target_date).order_by('category', 'item_name')
+    if menu_items.exists():
+        serializer = MessMenuSerializer(menu_items, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    if not template_fallback:
+        return Response([], status=status.HTTP_200_OK)
+
+    fallback_item = (
+        menu_scope.filter(date__lte=target_date)
+        .order_by('-date')
+        .first()
+        or menu_scope.order_by('-date').first()
+    )
+    if fallback_item is None:
+        return Response([], status=status.HTTP_200_OK)
+
+    template_items = menu_scope.filter(date=fallback_item.date).order_by('category', 'item_name')
+    payload = [
+        {
+            'id': item.id,
+            'date': target_date.isoformat(),
+            'category': item.category,
+            'item_name': item.item_name,
+            'source_date': fallback_item.date.isoformat(),
+        }
+        for item in template_items
+    ]
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
 def get_dashboard_extras(request) -> Response:
+    batch, batch_error = _batch_from_request(request)
+    if batch_error:
+        return batch_error
+
     now = timezone.now()
     today = now.astimezone(LOCAL_TIMEZONE).date()
 
     birthdays_today = Student.objects.filter(
+        batch=batch,
         date_of_birth__month=today.month,
         date_of_birth__day=today.day,
     ).order_by('name')
     recent_announcements = Announcement.objects.filter(
         Q(starts_at__isnull=True) | Q(starts_at__lte=now),
         Q(expires_at__isnull=True) | Q(expires_at__gte=now),
+        batch=batch,
     ).order_by('-created_at')[:3]
+    current_time = now.astimezone(LOCAL_TIMEZONE).time().replace(second=0, microsecond=0)
     upcoming_assignments = Assignment.objects.select_related('course').filter(
-        due_date__gte=today
-    ).order_by('due_date', 'created_at')
+        batch=batch,
+    ).filter(
+        Q(due_date__gt=today)
+        | Q(due_date=today, due_time__isnull=True)
+        | Q(due_date=today, due_time__gte=current_time)
+    ).order_by('due_date', 'due_time', 'created_at')
 
     birthdays_payload = [
         {
@@ -634,24 +1187,178 @@ def change_student_password(request, roll_number: str) -> Response:
     )
 
 
-@api_view(['GET'])
-def admin_courses(request) -> Response:
-    _, _, error_response = _require_admin(request)
+@api_view(['GET', 'PUT'])
+def admin_settings(request) -> Response:
+    _, _, error_response = _require_ipmo_admin(request)
     if error_response:
         return error_response
 
-    courses = Course.objects.order_by('code')
-    serializer = CourseSerializer(courses, many=True)
+    batch, batch_error = _batch_from_request(request, required=False)
+    if batch_error:
+        return batch_error
+
+    settings_obj, _ = TermSettings.objects.get_or_create(
+        batch=batch,
+        defaults={
+            'current_term_name': 'Term-IX',
+            'timetable_sheet_url': '',
+            'attendance_sheet_url': '',
+            'mess_menu_sheet_url': '',
+            'birthday_sheet_url': '',
+        },
+    )
+
+    if request.method == 'GET':
+        serializer = TermSettingsSerializer(settings_obj)
+        payload = dict(serializer.data)
+        payload['selected_batch_code'] = batch.code
+        payload['batches'] = BatchSerializer(
+            Batch.objects.filter(is_active=True).order_by('code'),
+            many=True,
+        ).data
+        return Response(payload, status=status.HTTP_200_OK)
+
+    serializer = TermSettingsSerializer(settings_obj, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    serializer.save()
+    payload = dict(serializer.data)
+    payload['selected_batch_code'] = batch.code
+    payload['batches'] = BatchSerializer(
+        Batch.objects.filter(is_active=True).order_by('code'),
+        many=True,
+    ).data
+    return Response(payload, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+def admin_students(request) -> Response:
+    _, _, error_response = _require_ipmo_admin(request)
+    if error_response:
+        return error_response
+    batch, batch_error = _batch_from_request(request, required=False)
+    if batch_error:
+        return batch_error
+
+    if request.method == 'GET':
+        students = Student.objects.filter(batch=batch).order_by('roll_number')
+        serializer = StudentSerializer(students, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    payload = dict(request.data)
+    payload['batch_code'] = payload.get('batch_code') or batch.code
+    serializer = StudentSerializer(data=payload)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    student = serializer.save()
+    initial_password = str(request.data.get('password', '')).strip()
+    if not initial_password:
+        initial_password = f'IIM@{student.roll_number}'
+    student.set_password(initial_password)
+    student.save(update_fields=['password'])
+
+    response_serializer = StudentSerializer(student)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+def admin_student_detail(request, roll_number: str) -> Response:
+    _, _, error_response = _require_ipmo_admin(request)
+    if error_response:
+        return error_response
+
+    student_qs = Student.objects.filter(roll_number=roll_number.upper())
+    batch_code = _normalize_batch_code(request.query_params.get('batch_code'))
+    if batch_code:
+        student_qs = student_qs.filter(batch_id=batch_code)
+    student = get_object_or_404(student_qs)
+
+    if request.method == 'GET':
+        serializer = StudentSerializer(student)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    if request.method == 'DELETE':
+        student.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = StudentSerializer(student, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    serializer.save()
+
+    new_password = str(request.data.get('password', '')).strip()
+    if new_password:
+        student.set_password(new_password)
+        student.save(update_fields=['password'])
+
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@api_view(['PATCH'])
+@api_view(['GET', 'POST'])
+def admin_courses(request) -> Response:
+    _, _, error_response = _require_ipmo_admin(request)
+    if error_response:
+        return error_response
+
+    if request.method == 'GET':
+        courses = Course.objects.order_by('code')
+        serializer = CourseSerializer(courses, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    code = str(request.data.get('code', '')).strip().upper()
+    name = str(request.data.get('name', '')).strip()
+    if not code or not name:
+        return Response(
+            {'detail': 'code and name are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        credits = int(request.data.get('credits', 0))
+    except (TypeError, ValueError):
+        return Response(
+            {'detail': 'credits must be an integer.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if credits < 0:
+        return Response(
+            {'detail': 'credits must be a non-negative integer.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if Course.objects.filter(code=code).exists():
+        return Response(
+            {'detail': 'A course with this code already exists.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    course = Course.objects.create(
+        code=code,
+        name=name[:150],
+        credits=credits,
+        drive_link=str(request.data.get('drive_link', '')).strip() or None,
+    )
+    serializer = CourseSerializer(course)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 def admin_course_detail(request, course_code: str) -> Response:
-    _, _, error_response = _require_admin(request)
+    _, _, error_response = _require_ipmo_admin(request)
     if error_response:
         return error_response
 
     course = get_object_or_404(Course, code=course_code.upper())
+
+    if request.method == 'GET':
+        serializer = CourseSerializer(course)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    if request.method == 'DELETE':
+        course.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     update_fields: list[str] = []
 
     if 'name' in request.data:
@@ -670,12 +1377,18 @@ def admin_course_detail(request, course_code: str) -> Response:
 
     if 'credits' in request.data:
         try:
-            course.credits = int(request.data.get('credits'))
+            credits = int(request.data.get('credits'))
         except (TypeError, ValueError):
             return Response(
                 {'detail': 'credits must be an integer.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if credits < 0:
+            return Response(
+                {'detail': 'credits must be a non-negative integer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        course.credits = credits
         update_fields.append('credits')
 
     if update_fields:
@@ -683,6 +1396,29 @@ def admin_course_detail(request, course_code: str) -> Response:
 
     serializer = CourseSerializer(course)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+def admin_upload_grades(request) -> Response:
+    _, _, error_response = _require_ipmo_admin(request)
+    if error_response:
+        return error_response
+
+    batch, batch_error = _batch_from_request(request, required=False)
+    if batch_error:
+        return batch_error
+
+    payload = request.data.copy()
+    if not payload.get('batch_code'):
+        payload['batch_code'] = batch.code
+
+    serializer = GradeDocumentSerializer(data=payload)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    document = serializer.save()
+    response_serializer = GradeDocumentSerializer(document)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET', 'POST'])
@@ -828,6 +1564,359 @@ def admin_announcement_detail(request, announcement_id: int) -> Response:
 
     serializer = AnnouncementSerializer(announcement, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+def admin_assignments(request) -> Response:
+    _, _, error_response = _require_admin(request)
+    if error_response:
+        return error_response
+
+    batch, batch_error = _batch_from_request(request, required=False)
+    if batch_error:
+        return batch_error
+
+    if request.method == 'GET':
+        assignments = (
+            Assignment.objects.select_related('course')
+            .filter(batch=batch)
+            .order_by('due_date', 'due_time', 'created_at')
+        )
+        serializer = AssignmentSerializer(assignments, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    course_code = str(request.data.get('course_code', '')).strip().upper()
+    title = str(request.data.get('title', '')).strip()
+    if not course_code or not title:
+        return Response(
+            {'detail': 'course_code and title are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    course = get_object_or_404(Course, code=course_code)
+    due_date, due_time, due_error = _resolve_assignment_deadline(request)
+    if due_error:
+        return due_error
+
+    assignment = Assignment.objects.create(
+        batch=batch,
+        course=course,
+        title=title[:200],
+        description=str(request.data.get('description', '')).strip(),
+        due_date=due_date,
+        due_time=due_time,
+    )
+    serializer = AssignmentSerializer(assignment)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def admin_assignment_detail(request, assignment_id: int) -> Response:
+    _, _, error_response = _require_admin(request)
+    if error_response:
+        return error_response
+
+    batch, batch_error = _batch_from_request(request, required=False)
+    if batch_error:
+        return batch_error
+
+    assignment = get_object_or_404(Assignment, pk=assignment_id, batch=batch)
+    if request.method == 'DELETE':
+        assignment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    update_fields: list[str] = []
+    if 'title' in request.data:
+        title = str(request.data.get('title', '')).strip()
+        if not title:
+            return Response(
+                {'detail': 'title cannot be empty.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        assignment.title = title[:200]
+        update_fields.append('title')
+
+    if 'description' in request.data:
+        assignment.description = str(request.data.get('description', '')).strip()
+        update_fields.append('description')
+
+    if 'course_code' in request.data:
+        course_code = str(request.data.get('course_code', '')).strip().upper()
+        if not course_code:
+            return Response(
+                {'detail': 'course_code cannot be empty.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        assignment.course = get_object_or_404(Course, code=course_code)
+        update_fields.append('course')
+
+    if 'due_at' in request.data or 'due_date' in request.data or 'due_time' in request.data:
+        due_date, due_time, due_error = _resolve_assignment_deadline(request)
+        if due_error:
+            return due_error
+        assignment.due_date = due_date
+        assignment.due_time = due_time
+        update_fields.extend(['due_date', 'due_time'])
+
+    if update_fields:
+        assignment.save(update_fields=list(set(update_fields)))
+
+    serializer = AssignmentSerializer(assignment)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+def admin_polls(request) -> Response:
+    admin_user, _, error_response = _require_admin(request)
+    if error_response:
+        return error_response
+
+    batch, batch_error = _batch_from_request(request, required=False)
+    if batch_error:
+        return batch_error
+
+    if request.method == 'GET':
+        polls = (
+            Poll.objects.select_related('target_course')
+            .prefetch_related('options')
+            .filter(batch=batch)
+            .order_by('-created_at')
+        )
+        serializer = PollSerializer(polls, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    title = str(request.data.get('title', '')).strip()
+    if not title:
+        return Response(
+            {'detail': 'title is required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    target_type = str(request.data.get('target_type', 'ALL')).strip().upper() or 'ALL'
+    valid_types = {choice for choice, _ in Poll.TARGET_TYPE_CHOICES}
+    if target_type not in valid_types:
+        return Response(
+            {'detail': f'Invalid target_type. Choose one of: {", ".join(sorted(valid_types))}.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    target_course = None
+    target_course_code = str(request.data.get('target_course_code', '')).strip().upper()
+    if target_type == 'COURSE':
+        if not target_course_code:
+            return Response(
+                {'detail': 'target_course_code is required when target_type is COURSE.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        target_course = get_object_or_404(Course, code=target_course_code)
+
+    raw_options = request.data.get('options', [])
+    if isinstance(raw_options, str):
+        try:
+            parsed_options = json.loads(raw_options)
+        except json.JSONDecodeError:
+            parsed_options = [line.strip() for line in raw_options.split('\n') if line.strip()]
+    else:
+        parsed_options = raw_options
+
+    if not isinstance(parsed_options, list):
+        return Response(
+            {'detail': 'options must be a list of option texts.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    cleaned_options = [str(option).strip() for option in parsed_options if str(option).strip()]
+    if len(cleaned_options) < 2:
+        return Response(
+            {'detail': 'At least two poll options are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    cleaned_options = cleaned_options[:8]
+
+    expires_at = _parse_optional_datetime(request.data.get('expires_at'))
+    if request.data.get('expires_at') and not expires_at:
+        return Response(
+            {'detail': 'Invalid expires_at format. Use ISO datetime.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if expires_at and expires_at <= timezone.now():
+        return Response(
+            {'detail': 'expires_at must be in the future.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    creator_name = admin_user.get_full_name().strip() or admin_user.username
+    with transaction.atomic():
+        poll = Poll.objects.create(
+            batch=batch,
+            title=title[:220],
+            description=str(request.data.get('description', '')).strip(),
+            target_type=target_type,
+            target_course=target_course,
+            created_by=creator_name[:100],
+            expires_at=expires_at,
+        )
+        PollOption.objects.bulk_create(
+            [PollOption(poll=poll, text=option[:220]) for option in cleaned_options]
+        )
+
+    serialized = PollSerializer(Poll.objects.prefetch_related('options').get(pk=poll.id))
+    return Response(serialized.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def admin_poll_detail(request, poll_id: int) -> Response:
+    _, _, error_response = _require_admin(request)
+    if error_response:
+        return error_response
+
+    batch, batch_error = _batch_from_request(request, required=False)
+    if batch_error:
+        return batch_error
+
+    poll = get_object_or_404(Poll, pk=poll_id, batch=batch)
+    if request.method == 'DELETE':
+        poll.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    update_fields: list[str] = []
+    if 'title' in request.data:
+        title = str(request.data.get('title', '')).strip()
+        if not title:
+            return Response(
+                {'detail': 'title cannot be empty.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        poll.title = title[:220]
+        update_fields.append('title')
+
+    if 'description' in request.data:
+        poll.description = str(request.data.get('description', '')).strip()
+        update_fields.append('description')
+
+    if 'expires_at' in request.data:
+        expires_at = _parse_optional_datetime(request.data.get('expires_at'))
+        if request.data.get('expires_at') and not expires_at:
+            return Response(
+                {'detail': 'Invalid expires_at format. Use ISO datetime.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        poll.expires_at = expires_at
+        update_fields.append('expires_at')
+
+    if update_fields:
+        poll.save(update_fields=list(set(update_fields)))
+
+    serialized = PollSerializer(Poll.objects.prefetch_related('options').get(pk=poll.id))
+    return Response(serialized.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+def get_active_polls(request) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    now = timezone.now()
+    polls = (
+        Poll.objects.select_related('target_course', 'batch')
+        .prefetch_related('options', 'votes')
+        .filter(
+            Q(batch=student.batch) | Q(batch__isnull=True),
+            Q(expires_at__isnull=True) | Q(expires_at__gte=now),
+        )
+        .order_by('-created_at')
+    )
+
+    enrolled_course_ids = _enrolled_course_ids(student)
+    visible_polls = [
+        _serialize_poll_for_student(poll, student)
+        for poll in polls
+        if _poll_visible_for_student(poll, student, enrolled_course_ids)
+    ]
+    return Response(visible_polls, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+def cast_poll_vote(request, poll_id: int) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    poll = get_object_or_404(
+        Poll.objects.select_related('target_course').prefetch_related('options', 'votes'),
+        pk=poll_id,
+    )
+    now = timezone.now()
+    if poll.expires_at and poll.expires_at < now:
+        return Response(
+            {'detail': 'This poll has expired.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if poll.batch_id and student.batch_id and poll.batch_id != student.batch_id:
+        return Response(
+            {'detail': 'This poll is not targeted to your batch.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    enrolled_course_ids = _enrolled_course_ids(student)
+    if not _poll_visible_for_student(poll, student, enrolled_course_ids):
+        return Response(
+            {'detail': 'This poll is not targeted to your profile.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        option_id = int(request.data.get('option_id'))
+    except (TypeError, ValueError):
+        return Response(
+            {'detail': 'option_id is required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    option = poll.options.filter(pk=option_id).first()
+    if option is None:
+        return Response(
+            {'detail': 'Invalid option_id for this poll.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        PollVote.objects.create(poll=poll, option=option, student=student)
+    except IntegrityError:
+        return Response(
+            {'detail': 'You have already voted on this poll.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    refreshed = Poll.objects.select_related('target_course').prefetch_related('options', 'votes').get(pk=poll.id)
+    return Response(_serialize_poll_for_student(refreshed, student), status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+def cr_generate_draft(request) -> Response:
+    _, _, error_response = _require_admin(request)
+    if error_response:
+        return error_response
+
+    prompt = str(request.data.get('prompt', '')).strip()
+    if not prompt:
+        return Response(
+            {'detail': 'prompt is required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        draft = _generate_gemini_draft(prompt)
+    except ValueError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except Exception as exc:
+        return Response(
+            {'detail': f'Unable to generate draft right now: {exc}'},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    return Response({'draft': draft}, status=status.HTTP_200_OK)
 
 
 @api_view(['GET', 'POST'])

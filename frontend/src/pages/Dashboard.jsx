@@ -4,6 +4,8 @@ import {
   BellRing,
   BookOpenText,
   Cake,
+  ChevronDown,
+  ChevronUp,
   ChevronRight,
   ClipboardCheck,
   UtensilsCrossed,
@@ -132,13 +134,36 @@ function prioritizeMealItemsForWidget(label, items) {
   })
 }
 
-function isDueIn48Hours(dueDate, nowEpoch) {
-  if (!dueDate) {
-    return false
-  }
-  const dueAt = new Date(`${dueDate}T23:59:59`)
+function getAssignmentDeadlineMeta(assignment, nowEpoch) {
+  const dueAt = assignment?.due_at
+    ? new Date(assignment.due_at)
+    : new Date(`${assignment?.due_date}T${assignment?.due_time || '23:59:00'}`)
   const delta = dueAt.getTime() - nowEpoch
-  return delta >= 0 && delta <= 48 * 60 * 60 * 1000
+  const totalHours = Math.floor(delta / (1000 * 60 * 60))
+  const totalDays = Math.floor(delta / (1000 * 60 * 60 * 24))
+
+  if (delta < 0) {
+    return {
+      text: 'Deadline passed',
+      classes: 'bg-slate-100 border-slate-300 text-slate-600',
+    }
+  }
+  if (delta < 24 * 60 * 60 * 1000) {
+    return {
+      text: `${Math.max(0, totalHours)}h left`,
+      classes: 'bg-rose-50 border-rose-200 text-rose-700 font-bold',
+    }
+  }
+  if (delta <= 3 * 24 * 60 * 60 * 1000) {
+    return {
+      text: `${Math.max(1, totalDays)}d left`,
+      classes: 'bg-amber-50 border-amber-200 text-amber-700',
+    }
+  }
+  return {
+    text: `${Math.max(1, totalDays)}d left`,
+    classes: 'bg-slate-50 border-slate-200 text-slate-700',
+  }
 }
 
 function courseColorClass(courseCode) {
@@ -168,6 +193,7 @@ export default function Dashboard() {
   const [birthdaysToday, setBirthdaysToday] = useState([])
   const [recentAnnouncements, setRecentAnnouncements] = useState([])
   const [upcomingAssignments, setUpcomingAssignments] = useState([])
+  const [expandedAssignments, setExpandedAssignments] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [clock, setClock] = useState(Date.now())
@@ -201,7 +227,7 @@ export default function Dashboard() {
           api.get(`/api/v1/timetable/${user.rollNumber}/`, { signal: controller.signal }),
           api.get('/api/v1/dashboard-extras/', { signal: controller.signal }),
           ...menuDates.map((dateIso) =>
-            api.get(`/api/v1/mess-menu/?date=${dateIso}`, { signal: controller.signal }),
+            api.get(`/api/v1/mess-menu/?date=${dateIso}&template_fallback=1`, { signal: controller.signal }),
           ),
         ])
 
@@ -359,7 +385,7 @@ export default function Dashboard() {
     () =>
       upcomingAssignments.map((assignment) => ({
         ...assignment,
-        dueSoon: isDueIn48Hours(assignment?.due_date, clock),
+        deadline: getAssignmentDeadlineMeta(assignment, clock),
       })),
     [upcomingAssignments, clock],
   )
@@ -598,7 +624,10 @@ export default function Dashboard() {
               {assignmentRows.map((assignment) => (
                 <article
                   key={assignment.id}
-                  className="rounded-2xl border border-slate-200/70 bg-slate-50/70 p-3"
+                  className={cn(
+                    'rounded-2xl border p-3',
+                    assignment.deadline.classes,
+                  )}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-sm font-semibold text-slate-900">{assignment.title}</p>
@@ -606,15 +635,31 @@ export default function Dashboard() {
                       {assignment.course?.code || 'N/A'}
                     </span>
                   </div>
-                  <p
-                    className={cn(
-                      'mt-2 text-xs font-medium',
-                      assignment.dueSoon ? 'text-rose-600' : 'text-slate-600',
-                    )}
-                  >
-                    Due {formatDateLabel(`${assignment.due_date}T00:00:00`)}
-                    {assignment.dueSoon ? ' • within 48 hours' : ''}
+                  <p className="mt-2 text-xs font-medium text-slate-700">
+                    Due {formatDateLabel(`${assignment.due_date}T00:00:00`)} • {assignment.deadline.text}
                   </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedAssignments((current) => ({
+                        ...current,
+                        [assignment.id]: !current[assignment.id],
+                      }))
+                    }
+                    className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-iim-blue"
+                  >
+                    Details
+                    {expandedAssignments[assignment.id] ? (
+                      <ChevronUp className="h-3.5 w-3.5" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                  {expandedAssignments[assignment.id] ? (
+                    <p className="mt-2 rounded-xl bg-white/80 px-2.5 py-2 text-xs text-slate-700">
+                      {assignment.description || 'No additional details provided.'}
+                    </p>
+                  ) : null}
                 </article>
               ))}
             </div>

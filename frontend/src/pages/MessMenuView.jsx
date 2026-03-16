@@ -5,8 +5,8 @@ import api from '../lib/api'
 import { cn } from '../lib/cn'
 import { formatDateLabel, startOfWeek, toIsoDate } from '../lib/date'
 
-function buildWeekDays() {
-  const start = startOfWeek(new Date())
+function buildWeekDays(anchorDate = new Date()) {
+  const start = startOfWeek(anchorDate)
   return Array.from({ length: 7 }).map((_, index) => {
     const day = new Date(start)
     day.setDate(start.getDate() + index)
@@ -75,8 +75,12 @@ function itemPriorityForBreakfast(item) {
 }
 
 export default function MessMenuView() {
-  const weekDays = useMemo(() => buildWeekDays(), [])
   const todayIso = toIsoDate(new Date())
+  const [weekAnchorIso, setWeekAnchorIso] = useState(todayIso)
+  const weekDays = useMemo(
+    () => buildWeekDays(new Date(`${weekAnchorIso}T00:00:00`)),
+    [weekAnchorIso],
+  )
 
   const [menuMap, setMenuMap] = useState({})
   const [activeDate, setActiveDate] = useState(todayIso)
@@ -99,6 +103,25 @@ export default function MessMenuView() {
         weekDays.forEach((day, index) => {
           nextMap[day.iso] = Array.isArray(responses[index].data) ? responses[index].data : []
         })
+
+        const hasAnyItems = Object.values(nextMap).some((items) => Array.isArray(items) && items.length > 0)
+        if (!hasAnyItems) {
+          const fallbackProbe = await api.get(
+            `/api/v1/mess-menu/?date=${todayIso}&template_fallback=1`,
+            { signal: controller.signal },
+          )
+          const sourceDate = fallbackProbe?.data?.[0]?.source_date
+          if (
+            sourceDate &&
+            !weekDays.some((day) => day.iso === sourceDate) &&
+            sourceDate !== weekAnchorIso
+          ) {
+            setWeekAnchorIso(sourceDate)
+            setActiveDate(sourceDate)
+            return
+          }
+        }
+
         setMenuMap(nextMap)
       } catch (fetchError) {
         if (fetchError.name !== 'CanceledError') {
@@ -111,7 +134,13 @@ export default function MessMenuView() {
 
     loadWeekMenu()
     return () => controller.abort()
-  }, [weekDays])
+  }, [weekDays, todayIso, weekAnchorIso])
+
+  useEffect(() => {
+    if (!weekDays.some((day) => day.iso === activeDate)) {
+      setActiveDate(weekDays[0]?.iso || todayIso)
+    }
+  }, [weekDays, activeDate, todayIso])
 
   const activeItems = useMemo(() => menuMap[activeDate] || [], [menuMap, activeDate])
 

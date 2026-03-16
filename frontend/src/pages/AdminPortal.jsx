@@ -5,15 +5,20 @@ import {
   BellRing,
   BrainCircuit,
   CalendarClock,
+  CheckSquare,
+  ClipboardCheck,
   ExternalLink,
   FileUp,
   FolderOpen,
   LogOut,
+  Plus,
   RefreshCw,
   Save,
   ShieldCheck,
   Sparkles,
   Trash2,
+  Vote,
+  X,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -51,6 +56,17 @@ function announcementStatus(announcement) {
   return { label: 'Live', className: 'bg-emerald-100 text-emerald-700' }
 }
 
+function toIsoDateTime(dateValue, timeValue) {
+  if (!dateValue || !timeValue) {
+    return ''
+  }
+  const parsed = new Date(`${dateValue}T${timeValue}:00`)
+  if (Number.isNaN(parsed.getTime())) {
+    return ''
+  }
+  return parsed.toISOString()
+}
+
 export default function AdminPortal() {
   const [accessToken, setAccessToken] = useState(() => getAdminAccessToken())
   const [adminUser, setAdminUser] = useState(() => getStoredAdminUser())
@@ -68,18 +84,43 @@ export default function AdminPortal() {
   const [selectedCourseDriveLink, setSelectedCourseDriveLink] = useState('')
   const [materials, setMaterials] = useState([])
   const [announcements, setAnnouncements] = useState([])
+  const [availableBatches, setAvailableBatches] = useState([])
+  const [assignments, setAssignments] = useState([])
+  const [polls, setPolls] = useState([])
   const [panelLoading, setPanelLoading] = useState(false)
   const [materialsLoading, setMaterialsLoading] = useState(false)
   const [syncLoading, setSyncLoading] = useState(false)
+  const [activeComposerTab, setActiveComposerTab] = useState('announcement')
+  const [aiModal, setAiModal] = useState({
+    open: false,
+    target: 'announcement',
+    prompt: '',
+    loading: false,
+  })
 
   const [announcementForm, setAnnouncementForm] = useState({
-    prompt: '',
     title: '',
     content: '',
     postedBy: '',
     startsAt: '',
     expiresAt: '',
     attachment: null,
+  })
+  const [assignmentForm, setAssignmentForm] = useState({
+    courseCode: '',
+    title: '',
+    description: '',
+    dueDate: '',
+    dueTime: '',
+  })
+  const [pollForm, setPollForm] = useState({
+    title: '',
+    description: '',
+    targetType: 'ALL',
+    batchCode: '',
+    targetCourseCode: '',
+    expiresAt: '',
+    options: ['', ''],
   })
   const [materialForm, setMaterialForm] = useState({
     title: '',
@@ -127,16 +168,35 @@ export default function AdminPortal() {
     setPanelLoading(true)
     setGlobalError('')
     try {
-      const [courseResponse, announcementResponse] = await Promise.all([
+      const [courseResponse, announcementResponse, assignmentResponse, pollResponse] = await Promise.all([
         adminApi.get('/api/v1/admin/courses/'),
         adminApi.get('/api/v1/admin/announcements/'),
+        adminApi.get('/api/v1/admin/assignments/'),
+        adminApi.get('/api/v1/admin/polls/'),
       ])
+      const settingsResponse = await adminApi.get('/api/v1/admin/settings/')
 
       const nextCourses = Array.isArray(courseResponse.data) ? courseResponse.data : []
       const nextAnnouncements = Array.isArray(announcementResponse.data) ? announcementResponse.data : []
+      const nextAssignments = Array.isArray(assignmentResponse.data) ? assignmentResponse.data : []
+      const nextPolls = Array.isArray(pollResponse.data) ? pollResponse.data : []
+      const nextBatches = Array.isArray(settingsResponse.data?.batches) ? settingsResponse.data.batches : []
+      const selectedBatch = settingsResponse.data?.selected_batch_code || nextBatches[0]?.code || ''
 
       setCourses(nextCourses)
       setAnnouncements(nextAnnouncements)
+      setAssignments(nextAssignments)
+      setPolls(nextPolls)
+      setAvailableBatches(nextBatches)
+      setAssignmentForm((current) => ({
+        ...current,
+        courseCode: current.courseCode || nextCourses[0]?.code || '',
+      }))
+      setPollForm((current) => ({
+        ...current,
+        batchCode: current.batchCode || selectedBatch || nextBatches[0]?.code || '',
+        targetCourseCode: current.targetCourseCode || nextCourses[0]?.code || '',
+      }))
 
       const initialCourse = selectedCourse || nextCourses[0]?.code || ''
       setSelectedCourse(initialCourse)
@@ -204,6 +264,8 @@ export default function AdminPortal() {
     setCourses([])
     setMaterials([])
     setAnnouncements([])
+    setAssignments([])
+    setPolls([])
     setSelectedCourse('')
     setGlobalSuccess('Logged out from admin portal.')
   }
@@ -235,26 +297,49 @@ export default function AdminPortal() {
     }
   }
 
-  async function generateAnnouncementWithAI() {
-    if (!announcementForm.prompt.trim()) {
+  function openAIModal(target) {
+    setAiModal({
+      open: true,
+      target,
+      prompt: '',
+      loading: false,
+    })
+  }
+
+  async function generateDraftWithAI() {
+    const prompt = aiModal.prompt.trim()
+    if (!prompt) {
       setGlobalError('Please enter a prompt before generating with AI.')
       return
     }
 
     setGlobalError('')
     setGlobalSuccess('')
+    setAiModal((current) => ({ ...current, loading: true }))
     try {
-      const response = await adminApi.post('/api/v1/admin/ai/generate-announcement/', {
-        prompt: announcementForm.prompt.trim(),
+      const response = await adminApi.post('/api/v1/cr/generate-draft/', {
+        prompt,
       })
-      setAnnouncementForm((current) => ({
-        ...current,
-        title: response.data?.title || current.title,
-        content: response.data?.content || current.content,
-      }))
-      setGlobalSuccess('Announcement draft generated. Review and publish.')
+      const draft = String(response.data?.draft || '').trim()
+      if (!draft) {
+        throw new Error('AI returned an empty draft.')
+      }
+      if (aiModal.target === 'announcement') {
+        setAnnouncementForm((current) => ({
+          ...current,
+          content: draft,
+        }))
+      } else {
+        setAssignmentForm((current) => ({
+          ...current,
+          description: draft,
+        }))
+      }
+      setAiModal({ open: false, target: aiModal.target, prompt: '', loading: false })
+      setGlobalSuccess('Draft generated. Review and edit before publishing.')
     } catch (error) {
       setGlobalError(error?.response?.data?.detail || 'AI draft generation failed.')
+      setAiModal((current) => ({ ...current, loading: false }))
     }
   }
 
@@ -295,6 +380,101 @@ export default function AdminPortal() {
       setGlobalSuccess('Announcement published successfully.')
     } catch (error) {
       setGlobalError(error?.response?.data?.detail || 'Failed to publish announcement.')
+    }
+  }
+
+  async function createAssignment(event) {
+    event.preventDefault()
+    setGlobalError('')
+    setGlobalSuccess('')
+
+    const dueAt = toIsoDateTime(assignmentForm.dueDate, assignmentForm.dueTime)
+    if (!dueAt) {
+      setGlobalError('Please provide a valid due date and due time.')
+      return
+    }
+
+    try {
+      const response = await adminApi.post('/api/v1/admin/assignments/', {
+        course_code: assignmentForm.courseCode,
+        title: assignmentForm.title,
+        description: assignmentForm.description,
+        due_at: dueAt,
+      })
+      setAssignments((current) => [...current, response.data].sort((a, b) => {
+        const aTime = new Date(a?.due_at || `${a?.due_date}T${a?.due_time || '23:59:00'}`).getTime()
+        const bTime = new Date(b?.due_at || `${b?.due_date}T${b?.due_time || '23:59:00'}`).getTime()
+        return aTime - bTime
+      }))
+      setAssignmentForm((current) => ({
+        ...current,
+        title: '',
+        description: '',
+        dueDate: '',
+        dueTime: '',
+      }))
+      setGlobalSuccess('Assignment created.')
+    } catch (error) {
+      setGlobalError(error?.response?.data?.detail || 'Failed to create assignment.')
+    }
+  }
+
+  async function deleteAssignment(assignmentId) {
+    setGlobalError('')
+    setGlobalSuccess('')
+    try {
+      await adminApi.delete(`/api/v1/admin/assignments/${assignmentId}/`)
+      setAssignments((current) => current.filter((assignment) => assignment.id !== assignmentId))
+      setGlobalSuccess('Assignment deleted.')
+    } catch (error) {
+      setGlobalError(error?.response?.data?.detail || 'Failed to delete assignment.')
+    }
+  }
+
+  async function createPoll(event) {
+    event.preventDefault()
+    setGlobalError('')
+    setGlobalSuccess('')
+
+    const cleanedOptions = pollForm.options.map((item) => item.trim()).filter(Boolean)
+    if (cleanedOptions.length < 2) {
+      setGlobalError('Please provide at least two poll options.')
+      return
+    }
+
+    try {
+      const response = await adminApi.post('/api/v1/admin/polls/', {
+        title: pollForm.title,
+        description: pollForm.description,
+        target_type: pollForm.targetType,
+        target_course_code: pollForm.targetType === 'COURSE' ? pollForm.targetCourseCode : '',
+        batch_code: pollForm.batchCode,
+        expires_at: pollForm.expiresAt ? new Date(pollForm.expiresAt).toISOString() : '',
+        options: cleanedOptions,
+      })
+      setPolls((current) => [response.data, ...current])
+      setPollForm((current) => ({
+        ...current,
+        title: '',
+        description: '',
+        expiresAt: '',
+        options: ['', ''],
+      }))
+      setGlobalSuccess('Poll created.')
+    } catch (error) {
+      setGlobalError(error?.response?.data?.detail || 'Failed to create poll.')
+    }
+  }
+
+  async function deletePoll(pollId) {
+    setGlobalError('')
+    setGlobalSuccess('')
+    try {
+      await adminApi.delete(`/api/v1/admin/polls/${pollId}/`)
+      setPolls((current) => current.filter((poll) => poll.id !== pollId))
+      setGlobalSuccess('Poll deleted.')
+    } catch (error) {
+      setGlobalError(error?.response?.data?.detail || 'Failed to delete poll.')
     }
   }
 
@@ -540,6 +720,14 @@ export default function AdminPortal() {
               </p>
             </div>
             <div className="flex items-center gap-3">
+              {String(adminUser?.role || '').toUpperCase() === 'IPMO' ? (
+                <Link
+                  to="/ipmo"
+                  className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100"
+                >
+                  Open IPMO Console
+                </Link>
+              ) : null}
               <button
                 type="button"
                 onClick={runManualSync}
@@ -592,123 +780,377 @@ export default function AdminPortal() {
                   <div>
                     <h2 className="heading-tight text-xl font-semibold text-slate-900">
                       <span className="inline-flex items-center gap-2">
-                        <BellRing className="h-5 w-5 text-iim-blue" />
-                        Announcement Composer
+                        <CheckSquare className="h-5 w-5 text-iim-blue" />
+                        CR Workspace
                       </span>
                     </h2>
                     <p className="mt-1 text-sm text-slate-500">
-                      Create time-bound announcements and attach supporting files.
+                      Create announcements, assignments, and targeted polls from one place.
                     </p>
                   </div>
                 </div>
 
-                <form onSubmit={createAnnouncement} className="mt-5 space-y-4">
-                  <label className="block text-sm font-medium text-slate-700">
-                    AI Prompt
-                    <textarea
-                      rows={3}
-                      value={announcementForm.prompt}
-                      onChange={(event) =>
-                        setAnnouncementForm((current) => ({ ...current, prompt: event.target.value }))
-                      }
-                      placeholder="Example: Draft a notice for LE quiz on 10 March, submission rules and classroom etiquette."
-                      className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={generateAnnouncementWithAI}
-                    className="inline-flex items-center gap-2 rounded-xl border border-iim-blue/30 bg-blue-50 px-4 py-2 text-sm font-semibold text-iim-blue transition hover:bg-blue-100"
-                  >
-                    <Sparkles className="h-4 w-4" />
-                    Generate with AI
-                  </button>
+                <div className="mt-4 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+                  {[
+                    { key: 'announcement', label: 'Announcement' },
+                    { key: 'assignment', label: 'Assignment' },
+                    { key: 'poll', label: 'Create Poll' },
+                  ].map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setActiveComposerTab(tab.key)}
+                      className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
+                        activeComposerTab === tab.key
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
 
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <label className="block text-sm font-medium text-slate-700">
-                      Title
-                      <input
-                        value={announcementForm.title}
+                {activeComposerTab === 'announcement' ? (
+                  <form onSubmit={createAnnouncement} className="mt-5 space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Title
+                        <input
+                          value={announcementForm.title}
+                          onChange={(event) =>
+                            setAnnouncementForm((current) => ({ ...current, title: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                          required
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Posted By
+                        <input
+                          value={announcementForm.postedBy}
+                          onChange={(event) =>
+                            setAnnouncementForm((current) => ({ ...current, postedBy: event.target.value }))
+                          }
+                          placeholder="Optional (auto-fills from logged in admin)"
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        />
+                      </label>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="block text-sm font-medium text-slate-700">Content</label>
+                        <button
+                          type="button"
+                          onClick={() => openAIModal('announcement')}
+                          className="inline-flex items-center gap-1 rounded-lg border border-iim-blue/30 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-iim-blue transition hover:bg-blue-100"
+                        >
+                          <Sparkles className="h-3.5 w-3.5" />
+                          Draft with AI
+                        </button>
+                      </div>
+                      <textarea
+                        rows={5}
+                        value={announcementForm.content}
                         onChange={(event) =>
-                          setAnnouncementForm((current) => ({ ...current, title: event.target.value }))
+                          setAnnouncementForm((current) => ({ ...current, content: event.target.value }))
                         }
-                        className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
                         required
                       />
-                    </label>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Starts At (optional)
+                        <input
+                          type="datetime-local"
+                          value={announcementForm.startsAt}
+                          onChange={(event) =>
+                            setAnnouncementForm((current) => ({ ...current, startsAt: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Expires At (optional)
+                        <input
+                          type="datetime-local"
+                          value={announcementForm.expiresAt}
+                          onChange={(event) =>
+                            setAnnouncementForm((current) => ({ ...current, expiresAt: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        />
+                      </label>
+                    </div>
+
                     <label className="block text-sm font-medium text-slate-700">
-                      Posted By
+                      Attachment (optional)
                       <input
-                        value={announcementForm.postedBy}
+                        type="file"
                         onChange={(event) =>
-                          setAnnouncementForm((current) => ({ ...current, postedBy: event.target.value }))
+                          setAnnouncementForm((current) => ({
+                            ...current,
+                            attachment: event.target.files?.[0] || null,
+                          }))
                         }
-                        placeholder="Optional (auto-fills from logged in admin)"
-                        className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        className="mt-1 block w-full cursor-pointer rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-600 file:mr-4 file:rounded-lg file:border-0 file:bg-iim-blue file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
                       />
                     </label>
-                  </div>
 
-                  <label className="block text-sm font-medium text-slate-700">
-                    Content
-                    <textarea
-                      rows={5}
-                      value={announcementForm.content}
-                      onChange={(event) =>
-                        setAnnouncementForm((current) => ({ ...current, content: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
-                      required
-                    />
-                  </label>
+                    <button
+                      type="submit"
+                      className="inline-flex items-center gap-2 rounded-xl bg-iim-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-900"
+                    >
+                      <Save className="h-4 w-4" />
+                      Publish Announcement
+                    </button>
+                  </form>
+                ) : null}
 
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <label className="block text-sm font-medium text-slate-700">
-                      Starts At (optional)
-                      <input
-                        type="datetime-local"
-                        value={announcementForm.startsAt}
+                {activeComposerTab === 'assignment' ? (
+                  <form onSubmit={createAssignment} className="mt-5 space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Course
+                        <select
+                          value={assignmentForm.courseCode}
+                          onChange={(event) =>
+                            setAssignmentForm((current) => ({ ...current, courseCode: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                          required
+                        >
+                          {courses.map((course) => (
+                            <option key={course.code} value={course.code}>
+                              {course.code} - {course.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Title
+                        <input
+                          value={assignmentForm.title}
+                          onChange={(event) =>
+                            setAssignmentForm((current) => ({ ...current, title: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                          required
+                        />
+                      </label>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Due Date
+                        <input
+                          type="date"
+                          value={assignmentForm.dueDate}
+                          onChange={(event) =>
+                            setAssignmentForm((current) => ({ ...current, dueDate: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                          required
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Due Time
+                        <input
+                          type="time"
+                          value={assignmentForm.dueTime}
+                          onChange={(event) =>
+                            setAssignmentForm((current) => ({ ...current, dueTime: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                          required
+                        />
+                      </label>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="block text-sm font-medium text-slate-700">Description</label>
+                        <button
+                          type="button"
+                          onClick={() => openAIModal('assignment')}
+                          className="inline-flex items-center gap-1 rounded-lg border border-iim-blue/30 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-iim-blue transition hover:bg-blue-100"
+                        >
+                          <Sparkles className="h-3.5 w-3.5" />
+                          Draft with AI
+                        </button>
+                      </div>
+                      <textarea
+                        rows={4}
+                        value={assignmentForm.description}
                         onChange={(event) =>
-                          setAnnouncementForm((current) => ({ ...current, startsAt: event.target.value }))
+                          setAssignmentForm((current) => ({ ...current, description: event.target.value }))
                         }
-                        className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="inline-flex items-center gap-2 rounded-xl bg-iim-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-900"
+                    >
+                      <ClipboardCheck className="h-4 w-4" />
+                      Publish Assignment
+                    </button>
+                  </form>
+                ) : null}
+
+                {activeComposerTab === 'poll' ? (
+                  <form onSubmit={createPoll} className="mt-5 space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Poll Title
+                        <input
+                          value={pollForm.title}
+                          onChange={(event) =>
+                            setPollForm((current) => ({ ...current, title: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                          required
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Batch
+                        <select
+                          value={pollForm.batchCode}
+                          onChange={(event) =>
+                            setPollForm((current) => ({ ...current, batchCode: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        >
+                          {availableBatches.map((batch) => (
+                            <option key={batch.code} value={batch.code}>
+                              {batch.display_name || batch.name || batch.code}
+                              {batch.ipm_year ? ` (${batch.ipm_year})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    <label className="block text-sm font-medium text-slate-700">
+                      Description (optional)
+                      <textarea
+                        rows={3}
+                        value={pollForm.description}
+                        onChange={(event) =>
+                          setPollForm((current) => ({ ...current, description: event.target.value }))
+                        }
+                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
                       />
                     </label>
-                    <label className="block text-sm font-medium text-slate-700">
-                      Expires At (optional)
-                      <input
-                        type="datetime-local"
-                        value={announcementForm.expiresAt}
-                        onChange={(event) =>
-                          setAnnouncementForm((current) => ({ ...current, expiresAt: event.target.value }))
+
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Target Audience
+                        <select
+                          value={pollForm.targetType}
+                          onChange={(event) =>
+                            setPollForm((current) => ({ ...current, targetType: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        >
+                          <option value="ALL">Batch</option>
+                          <option value="SECTION_A">Section A</option>
+                          <option value="SECTION_B">Section B</option>
+                          <option value="COURSE">Specific Subject</option>
+                        </select>
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Subject
+                        <select
+                          value={pollForm.targetCourseCode}
+                          onChange={(event) =>
+                            setPollForm((current) => ({ ...current, targetCourseCode: event.target.value }))
+                          }
+                          disabled={pollForm.targetType !== 'COURSE'}
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        >
+                          {courses.map((course) => (
+                            <option key={course.code} value={course.code}>
+                              {course.code}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Expires At (optional)
+                        <input
+                          type="datetime-local"
+                          value={pollForm.expiresAt}
+                          onChange={(event) =>
+                            setPollForm((current) => ({ ...current, expiresAt: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-slate-700">Options</p>
+                      {pollForm.options.map((option, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <input
+                            value={option}
+                            onChange={(event) =>
+                              setPollForm((current) => ({
+                                ...current,
+                                options: current.options.map((value, valueIndex) =>
+                                  valueIndex === index ? event.target.value : value,
+                                ),
+                              }))
+                            }
+                            placeholder={`Option ${index + 1}`}
+                            className="h-11 flex-1 rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                            required={index < 2}
+                          />
+                          {pollForm.options.length > 2 ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPollForm((current) => ({
+                                  ...current,
+                                  options: current.options.filter((_, valueIndex) => valueIndex !== index),
+                                }))
+                              }
+                              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPollForm((current) => ({
+                            ...current,
+                            options: [...current.options, ''],
+                          }))
                         }
-                        className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
-                      />
-                    </label>
-                  </div>
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Add Option
+                      </button>
+                    </div>
 
-                  <label className="block text-sm font-medium text-slate-700">
-                    Attachment (optional)
-                    <input
-                      type="file"
-                      onChange={(event) =>
-                        setAnnouncementForm((current) => ({
-                          ...current,
-                          attachment: event.target.files?.[0] || null,
-                        }))
-                      }
-                      className="mt-1 block w-full cursor-pointer rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-600 file:mr-4 file:rounded-lg file:border-0 file:bg-iim-blue file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
-                    />
-                  </label>
-
-                  <button
-                    type="submit"
-                    className="inline-flex items-center gap-2 rounded-xl bg-iim-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-900"
-                  >
-                    <Save className="h-4 w-4" />
-                    Publish Announcement
-                  </button>
-                </form>
+                    <button
+                      type="submit"
+                      className="inline-flex items-center gap-2 rounded-xl bg-iim-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-900"
+                    >
+                      <Vote className="h-4 w-4" />
+                      Publish Poll
+                    </button>
+                  </form>
+                ) : null}
               </article>
 
               <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -929,6 +1371,75 @@ export default function AdminPortal() {
               </article>
 
               <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="heading-tight text-xl font-semibold text-slate-900">Upcoming Assignments</h2>
+                <p className="mt-1 text-sm text-slate-500">Deadlines from the assignment tracker.</p>
+                <div className="mt-4 max-h-[360px] space-y-3 overflow-y-auto pr-1">
+                  {assignments.length === 0 ? (
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                      No assignments published yet.
+                    </p>
+                  ) : (
+                    assignments.map((assignment) => (
+                      <div key={assignment.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                        <p className="text-sm font-semibold text-slate-900">{assignment.title}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {assignment.course?.code || 'N/A'} • Due {toLocalDateTimeLabel(assignment.due_at)}
+                        </p>
+                        {assignment.description ? (
+                          <p className="mt-2 text-sm text-slate-700">{assignment.description}</p>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => deleteAssignment(assignment.id)}
+                          className="mt-3 inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-50"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </article>
+
+              <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="heading-tight text-xl font-semibold text-slate-900">Live Polls</h2>
+                <p className="mt-1 text-sm text-slate-500">Targeted polls currently visible to students.</p>
+                <div className="mt-4 max-h-[360px] space-y-3 overflow-y-auto pr-1">
+                  {polls.length === 0 ? (
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                      No polls created yet.
+                    </p>
+                  ) : (
+                    polls.map((poll) => (
+                      <div key={poll.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900">{poll.title}</p>
+                          <span className="rounded-full bg-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                            {poll.target_type}
+                          </span>
+                        </div>
+                        {poll.description ? (
+                          <p className="mt-1 text-sm text-slate-700">{poll.description}</p>
+                        ) : null}
+                        <p className="mt-2 text-xs text-slate-500">
+                          {poll.options?.length || 0} options • Expires {toLocalDateTimeLabel(poll.expires_at)}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => deletePoll(poll.id)}
+                          className="mt-3 inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-50"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </article>
+
+              <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h2 className="heading-tight text-xl font-semibold text-slate-900">Ordered Materials</h2>
                 <p className="mt-1 text-sm text-slate-500">
                   Reorder for student display priority ({selectedCourse || 'No course selected'}).
@@ -1034,11 +1545,55 @@ export default function AdminPortal() {
               <div className="rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs text-blue-900">
                 <p className="font-semibold">AI behavior:</p>
                 <p className="mt-1">
-                  If `OPENAI_API_KEY` is set on backend, real AI output is used. Otherwise fallback templates/order
-                  are applied so the panel still works.
+                  Set `GEMINI_API_KEY` in backend `.env` to enable AI draft generation.
                 </p>
               </div>
             </section>
+          </div>
+        ) : null}
+
+        {aiModal.open ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+            <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-soft">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="heading-tight text-lg font-semibold text-slate-900">Generate Draft with AI</h3>
+                <button
+                  type="button"
+                  onClick={() => setAiModal((current) => ({ ...current, open: false, prompt: '' }))}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="mt-2 text-sm text-slate-500">
+                Enter a short prompt. We will create a polished draft you can review before publishing.
+              </p>
+              <textarea
+                rows={4}
+                value={aiModal.prompt}
+                onChange={(event) => setAiModal((current) => ({ ...current, prompt: event.target.value }))}
+                placeholder="Example: Remind Section B about tomorrow's LE quiz and reporting time."
+                className="mt-4 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+              />
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAiModal((current) => ({ ...current, open: false, prompt: '' }))}
+                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={aiModal.loading}
+                  onClick={generateDraftWithAI}
+                  className="inline-flex items-center gap-2 rounded-xl bg-iim-blue px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-900 disabled:opacity-70"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {aiModal.loading ? 'Generating...' : 'Generate Draft'}
+                </button>
+              </div>
+            </div>
           </div>
         ) : null}
       </div>

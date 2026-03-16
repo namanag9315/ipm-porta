@@ -1,4 +1,12 @@
-import { AlertCircle, GraduationCap } from 'lucide-react'
+import {
+  AlertCircle,
+  BellRing,
+  BookOpenText,
+  BusFront,
+  GraduationCap,
+  RefreshCw,
+  UtensilsCrossed,
+} from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
@@ -10,6 +18,17 @@ import { useAuth } from '../hooks/useAuth'
 
 const CAMPUS_HERO_IMAGE_URL = iimIndoreWatermark
 const IIM_INDORE_LOGO_URL = 'https://upload.wikimedia.org/wikipedia/commons/a/a5/IIM_Indore_Logo.svg'
+const CAPTCHA_OPTIONS = [
+  { id: 'book', label: 'Book', icon: BookOpenText },
+  { id: 'bus', label: 'Bus', icon: BusFront },
+  { id: 'meal', label: 'Mess Meal', icon: UtensilsCrossed },
+  { id: 'notice', label: 'Notice', icon: BellRing },
+]
+
+function randomCaptchaId() {
+  const index = Math.floor(Math.random() * CAPTCHA_OPTIONS.length)
+  return CAPTCHA_OPTIONS[index].id
+}
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -18,13 +37,28 @@ export default function LoginPage() {
 
   const [rollNumber, setRollNumber] = useState('')
   const [password, setPassword] = useState('')
+  const [captchaTarget, setCaptchaTarget] = useState(() => randomCaptchaId())
+  const [captchaSelection, setCaptchaSelection] = useState('')
   const [error, setError] = useState('')
 
   const fromPath = location.state?.from?.pathname || '/dashboard'
 
+  const selectedCaptcha = CAPTCHA_OPTIONS.find((option) => option.id === captchaTarget)
+
+  function refreshCaptcha() {
+    setCaptchaTarget(randomCaptchaId())
+    setCaptchaSelection('')
+  }
+
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
+
+    if (!captchaSelection || captchaSelection !== captchaTarget) {
+      setError('Captcha check failed. Please pick the correct icon to continue.')
+      refreshCaptcha()
+      return
+    }
 
     try {
       await login({ rollNumber: rollNumber.trim().toUpperCase(), password })
@@ -116,6 +150,47 @@ export default function LoginPage() {
               onChange={(event) => setPassword(event.target.value)}
               required
             />
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-600">
+                  Creative Captcha
+                </p>
+                <button
+                  type="button"
+                  onClick={refreshCaptcha}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-100"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  New
+                </button>
+              </div>
+              <p className="text-sm text-slate-700">
+                Tap the icon for{' '}
+                <span className="font-bold text-iim-blue">{selectedCaptcha?.label || 'the prompt'}</span>
+              </p>
+              <div className="mt-3 grid grid-cols-4 gap-2">
+                {CAPTCHA_OPTIONS.map((option) => {
+                  const Icon = option.icon
+                  const selected = captchaSelection === option.id
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => setCaptchaSelection(option.id)}
+                      className={cn(
+                        'inline-flex h-11 items-center justify-center rounded-xl border transition',
+                        selected
+                          ? 'border-iim-blue bg-blue-50 text-iim-blue'
+                          : 'border-slate-300 bg-white text-slate-500 hover:border-slate-400 hover:text-slate-700',
+                      )}
+                    >
+                      <Icon className="h-5 w-5" />
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
 
             {error ? (
               <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">

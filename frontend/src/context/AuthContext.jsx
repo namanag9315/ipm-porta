@@ -17,6 +17,12 @@ function normalizeLoginPayload(payload, rollNumber) {
       responseUser?.rollNumber ||
       payload?.roll_number ||
       rollNumber,
+    batchCode:
+      responseUser?.batch_code ||
+      responseUser?.batchCode ||
+      payload?.batch_code ||
+      payload?.batchCode ||
+      '',
     name: responseUser?.name || payload?.name || rollNumber,
     section: responseUser?.section || payload?.section || '',
     email: responseUser?.email || payload?.email || '',
