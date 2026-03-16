@@ -38,6 +38,9 @@ Recommended free setup:
    - `GAS_BRIDGE_URL` = your Google Apps Script bridge URL (or use `GAS_BRIDGE_BASE_URL`)
    - Optional sheet fallbacks (IDs or full URLs):
      `TIMETABLE_SHEET_ID`, `ATTENDANCE_SHEET_ID`, `MESS_MENU_SHEET_ID`, `BIRTHDAY_SHEET_ID`
+   - Optional batch overrides:
+     `DEFAULT_BATCH_CODE` (ex: IPM03)
+     `ONLY_BATCH_CODE` (ex: IPM03 to hide other batches)
 6. Trigger deploy.
 7. After deploy, open:
    - `https://<your-render-service>.onrender.com/admin/`

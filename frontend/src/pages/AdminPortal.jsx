@@ -280,13 +280,18 @@ export default function AdminPortal() {
       }, {
         timeout: 180000,
       })
-      const result = response.data?.result || {}
-      const timetableCreated = result?.timetable?.created ?? 0
-      const attendanceUpserted = result?.attendance?.records_upserted ?? 0
-      const menuCreated = result?.mess_menu?.created ?? 0
-      setGlobalSuccess(
-        `Sync completed. Timetable: ${timetableCreated}, Attendance updates: ${attendanceUpserted}, Mess items: ${menuCreated}.`,
-      )
+      const queued = response?.status === 202 || response?.data?.status === 'queued'
+      if (queued) {
+        setGlobalSuccess('Sync started in background. Check back in a few minutes.')
+      } else {
+        const result = response.data?.result || {}
+        const timetableCreated = result?.timetable?.created ?? 0
+        const attendanceUpserted = result?.attendance?.records_upserted ?? 0
+        const menuCreated = result?.mess_menu?.created ?? 0
+        setGlobalSuccess(
+          `Sync completed. Timetable: ${timetableCreated}, Attendance updates: ${attendanceUpserted}, Mess items: ${menuCreated}.`,
+        )
+      }
       if (selectedCourse) {
         await fetchMaterials(selectedCourse)
       }

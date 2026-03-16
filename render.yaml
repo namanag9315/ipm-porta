@@ -28,6 +28,10 @@ services:
         sync: false
       - key: BIRTHDAY_SHEET_ID
         sync: false
+      - key: DEFAULT_BATCH_CODE
+        sync: false
+      - key: ONLY_BATCH_CODE
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: DJANGO_SECRET_KEY

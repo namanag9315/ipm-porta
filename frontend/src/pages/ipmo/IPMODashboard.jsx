@@ -140,12 +140,17 @@ export default function IPMODashboard() {
         batch_code: selectedBatch,
       })
       try {
-        await adminApi.post(
+        const syncResponse = await adminApi.post(
           '/api/v1/admin/run-sync/',
           { mode: 'sync', batch_code: selectedBatch },
           { timeout: 180000 },
         )
-        setSuccess('Settings saved and sync triggered successfully.')
+        const queued = syncResponse?.status === 202 || syncResponse?.data?.status === 'queued'
+        if (queued) {
+          setSuccess('Settings saved. Sync started in background — check back in a few minutes.')
+        } else {
+          setSuccess('Settings saved and sync completed successfully.')
+        }
       } catch (syncError) {
         const syncMessage =
           syncError?.response?.data?.detail || 'Sync failed after saving settings.'

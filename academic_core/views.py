@@ -1,12 +1,15 @@
 import datetime
 import json
+import logging
 import os
 import re
 import secrets
+import threading
 from zoneinfo import ZoneInfo
 
 import requests
 from django.contrib.auth import authenticate
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
@@ -63,6 +66,8 @@ from academic_core.serializers import (
 from academic_core.tasks import sync_google_sheets_data
 from academic_core.utils import format_batch_name, infer_batch_code_from_roll_number
 
+logger = logging.getLogger(__name__)
+
 LOCAL_TIMEZONE = ZoneInfo('Asia/Kolkata')
 DEFAULT_BATCH_CODE = str(max(2000, timezone.now().astimezone(LOCAL_TIMEZONE).year - 3))
 
@@ -116,6 +121,20 @@ def _get_or_create_batch(batch_code: str | None = None) -> Batch:
     return batch
 
 
+def _preferred_batch_code() -> str:
+    return _normalize_batch_code(
+        getattr(settings, 'ONLY_BATCH_CODE', '') or getattr(settings, 'DEFAULT_BATCH_CODE', '')
+    )
+
+
+def _allowed_batches():
+    qs = Batch.objects.filter(is_active=True)
+    only_code = _normalize_batch_code(getattr(settings, 'ONLY_BATCH_CODE', ''))
+    if only_code:
+        return qs.filter(code=only_code)
+    return qs
+
+
 def _batch_from_request(request, *, required: bool = False) -> tuple[Batch | None, Response | None]:
     batch_code = (
         request.query_params.get('batch_code')
@@ -123,6 +142,19 @@ def _batch_from_request(request, *, required: bool = False) -> tuple[Batch | Non
         or request.headers.get('X-Batch-Code')
     )
     normalized_code = _normalize_batch_code(batch_code)
+    preferred_code = _preferred_batch_code()
+
+    if preferred_code:
+        if normalized_code and normalized_code != preferred_code:
+            return (
+                None,
+                Response(
+                    {'detail': f'Only batch_code {preferred_code} is allowed.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+        if not normalized_code:
+            return _get_or_create_batch(preferred_code), None
 
     if not normalized_code:
         roll_hint = (
@@ -139,7 +171,7 @@ def _batch_from_request(request, *, required: bool = False) -> tuple[Batch | Non
                 None,
                 Response({'detail': 'batch_code is required.'}, status=status.HTTP_400_BAD_REQUEST),
             )
-        active_batches = Batch.objects.filter(is_active=True)
+        active_batches = _allowed_batches()
         batch = (
             active_batches.filter(code__regex=r'^20\d{2}$').order_by('code').first()
             or active_batches.order_by('code').first()
@@ -864,6 +896,22 @@ def logout_admin(request) -> Response:
     return Response({'detail': 'Logged out successfully.'}, status=status.HTTP_200_OK)
 
 
+def _run_sync_background(batch_code: str | None) -> str:
+    def _target() -> None:
+        try:
+            sync_google_sheets_data(batch_code=batch_code or None)
+        except Exception:
+            logger.exception('Background sync failed.')
+
+    thread = threading.Thread(
+        target=_target,
+        daemon=True,
+        name=f'ipm-sync-{batch_code or "all"}',
+    )
+    thread.start()
+    return thread.name
+
+
 @api_view(['POST'])
 def admin_run_sync(request) -> Response:
     _, _, error_response = _require_admin(request)
@@ -879,14 +927,15 @@ def admin_run_sync(request) -> Response:
         )
 
     if mode == 'sync':
-        result = sync_google_sheets_data(batch_code=batch_code or None)
+        thread_name = _run_sync_background(batch_code)
         return Response(
             {
-                'status': 'completed',
-                'mode': 'sync',
-                'result': result,
+                'status': 'queued',
+                'mode': 'sync_background',
+                'detail': 'Sync started in background.',
+                'thread': thread_name,
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_202_ACCEPTED,
         )
 
     try:
@@ -900,15 +949,15 @@ def admin_run_sync(request) -> Response:
             status=status.HTTP_202_ACCEPTED,
         )
     except Exception as exc:
-        result = sync_google_sheets_data(batch_code=batch_code or None)
+        thread_name = _run_sync_background(batch_code)
         return Response(
             {
-                'status': 'completed',
-                'mode': 'sync_fallback',
-                'detail': f'Celery unavailable ({exc}); ran sync inline.',
-                'result': result,
+                'status': 'queued',
+                'mode': 'async_background',
+                'detail': f'Celery unavailable ({exc}); sync started in background.',
+                'thread': thread_name,
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
@@ -1217,7 +1266,7 @@ def admin_settings(request) -> Response:
         payload = dict(serializer.data)
         payload['selected_batch_code'] = batch.code
         payload['batches'] = BatchSerializer(
-            Batch.objects.filter(is_active=True).order_by('code'),
+            _allowed_batches().order_by('code'),
             many=True,
         ).data
         return Response(payload, status=status.HTTP_200_OK)
@@ -1229,7 +1278,7 @@ def admin_settings(request) -> Response:
     payload = dict(serializer.data)
     payload['selected_batch_code'] = batch.code
     payload['batches'] = BatchSerializer(
-        Batch.objects.filter(is_active=True).order_by('code'),
+        _allowed_batches().order_by('code'),
         many=True,
     ).data
     return Response(payload, status=status.HTTP_200_OK)
