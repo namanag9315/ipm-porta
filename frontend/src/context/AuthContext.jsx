@@ -4,6 +4,10 @@ import { AuthContext } from './auth-context'
 import api from '../lib/api'
 import { clearAuth, getAccessToken, getStoredUser, storeAuth, storeUser } from '../lib/storage'
 
+const RETRYABLE_LOGIN_STATUSES = new Set([408, 502, 503, 504, 520, 521, 522, 523, 524])
+
+const sleep = (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs))
+
 function normalizeLoginPayload(payload, rollNumber) {
   const accessToken =
     payload?.access || payload?.token || payload?.access_token || payload?.tokens?.access
@@ -46,10 +50,7 @@ export function AuthProvider({ children }) {
   const login = async ({ rollNumber, password }) => {
     setLoading(true)
     try {
-      const response = await api.post('/api/auth/login/', {
-        roll_number: rollNumber,
-        password,
-      })
+      const response = await loginWithRetry({ rollNumber, password })
 
       const { accessToken, refreshToken, user: parsedUser } = normalizeLoginPayload(
         response.data,
@@ -71,6 +72,33 @@ export function AuthProvider({ children }) {
   const logout = () => {
     clearAuth()
     setUser(null)
+  }
+
+  async function loginWithRetry({ rollNumber, password }) {
+    const payload = { roll_number: rollNumber, password }
+    const maxAttempts = 3
+    let attempt = 0
+
+    while (attempt < maxAttempts) {
+      try {
+        return await api.post('/api/auth/login/', payload)
+      } catch (error) {
+        attempt += 1
+        const status = error?.response?.status
+        const isRetryable =
+          !error?.response ||
+          error?.code === 'ECONNABORTED' ||
+          RETRYABLE_LOGIN_STATUSES.has(status)
+
+        if (!isRetryable || attempt >= maxAttempts) {
+          throw error
+        }
+
+        await sleep(800 * attempt)
+      }
+    }
+
+    throw new Error('Login retries exhausted.')
   }
 
   const updateUserProfile = (partialUser) => {

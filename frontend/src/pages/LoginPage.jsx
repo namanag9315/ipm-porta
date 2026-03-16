@@ -64,10 +64,14 @@ export default function LoginPage() {
       await login({ rollNumber: rollNumber.trim().toUpperCase(), password })
       navigate(fromPath, { replace: true })
     } catch (submitError) {
+      const status = submitError?.response?.status
+      const isRetryable = !submitError?.response || status >= 500
       const message =
         submitError?.response?.data?.detail ||
         submitError?.response?.data?.message ||
-        'Unable to sign in. Please verify your roll number and password.'
+        (isRetryable
+          ? 'The server is waking up. Please wait 20-30 seconds and try again.'
+          : 'Unable to sign in. Please verify your roll number and password.')
       setError(message)
     }
   }
