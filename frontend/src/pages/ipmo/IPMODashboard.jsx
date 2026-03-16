@@ -327,22 +327,22 @@ export default function IPMODashboard() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto flex max-w-[1500px] gap-6 p-6">
-        <aside className="w-72 rounded-3xl border border-slate-800 bg-slate-900 p-5">
+      <div className="mx-auto flex max-w-[1500px] flex-col gap-6 p-4 md:flex-row md:p-6">
+        <aside className="w-full flex-shrink-0 rounded-3xl border border-slate-800 bg-slate-900 p-5 md:w-72">
           <div className="mb-8">
             <p className="text-xs uppercase tracking-[0.18em] text-amber-300">IPMO Console</p>
             <h1 className="mt-2 text-2xl font-semibold text-amber-100">Admin Portal</h1>
             <p className="mt-1 text-xs text-slate-400">{adminUser?.name || adminUser?.username}</p>
           </div>
 
-          <nav className="space-y-2">
+          <nav className="flex flex-wrap gap-2 md:flex-col md:space-y-2">
             {TABS.map(({ key, label, icon: Icon }) => (
               <button
                 key={key}
                 type="button"
                 onClick={() => setActiveTab(key)}
                 className={cn(
-                  'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
+                  'flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition md:w-full md:gap-3',
                   activeTab === key
                     ? 'bg-amber-400/20 text-amber-200'
                     : 'text-slate-300 hover:bg-slate-800',
