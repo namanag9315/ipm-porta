@@ -13,6 +13,8 @@ from django.core.wsgi import get_wsgi_application
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'ipm_portal.settings')
 
+application = get_wsgi_application()
+
 try:
     from django.contrib.auth.models import User
     if not User.objects.filter(username='ADMIN').exists():
@@ -20,5 +22,3 @@ try:
         print("Auto-created ADMIN superuser successfully on startup.")
 except Exception as e:
     print(f"Skipping auto-admin creation: {e}")
-
-application = get_wsgi_application()
