@@ -181,6 +181,11 @@ if not DEBUG:
 CORS_ALLOW_ALL_ORIGINS = (
     os.getenv('CORS_ALLOW_ALL_ORIGINS', 'True').lower() in {'true', '1', 'yes'}
 )
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
+    if origin.strip()
+]
 
 GAS_BRIDGE_BASE_URL = os.getenv('GAS_BRIDGE_BASE_URL', '')
 GAS_BRIDGE_URL = os.getenv('GAS_BRIDGE_URL', GAS_BRIDGE_BASE_URL)

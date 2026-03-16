@@ -12,8 +12,22 @@ services:
         value: ".onrender.com"
       - key: CORS_ALLOW_ALL_ORIGINS
         value: "False"
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
       - key: DJANGO_CSRF_TRUSTED_ORIGINS
         value: "https://*.onrender.com"
+      - key: GAS_BRIDGE_URL
+        sync: false
+      - key: GAS_BRIDGE_BASE_URL
+        sync: false
+      - key: TIMETABLE_SHEET_ID
+        sync: false
+      - key: ATTENDANCE_SHEET_ID
+        sync: false
+      - key: MESS_MENU_SHEET_ID
+        sync: false
+      - key: BIRTHDAY_SHEET_ID
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: DJANGO_SECRET_KEY

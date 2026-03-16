@@ -34,7 +34,7 @@ ROLL_NO_PATTERN = re.compile(r'^roll\s*no(?:\.|)?$', re.IGNORECASE)
 ROLL_NO_NORMALIZED_PATTERN = re.compile(r'^roll (?:no|number)$', re.IGNORECASE)
 SKIP_ATTENDANCE_SHEETS = {'time table', 'consolidated', 'mess', 'bld menu'}
 ATTENDANCE_MARKERS = {'P', 'A', 'L'}
-SHEET_PARAM_CANDIDATES = ('spreadsheetId', 'sheetId', 'id', 'sheet_id')
+SHEET_PARAM_CANDIDATES = ('id', 'spreadsheetId', 'sheetId', 'sheet_id')
 LOCAL_TIMEZONE = ZoneInfo('Asia/Kolkata')
 
 TIMETABLE_SHEET_NAME = 'Time table'
@@ -1136,24 +1136,35 @@ def _fetch_payload_from_url(
     response = requests.get(url, params=params, timeout=60)
     response.raise_for_status()
     raw_payload = response.json()
+    if isinstance(raw_payload, dict):
+        error_value = raw_payload.get('error')
+        if isinstance(error_value, str) and error_value.strip():
+            raise ValueError(error_value.strip())
     return _extract_sheet_mapping(raw_payload, fallback_sheet_name=fallback_sheet_name)
 
 
-def _fetch_payload_by_sheet_ids(term_settings: TermSettings) -> dict[str, list[list[Any]]]:
+def _fetch_payload_by_sheet_ids(
+    term_settings: TermSettings | None,
+) -> dict[str, list[list[Any]]]:
     base_url = settings.GAS_BRIDGE_BASE_URL or settings.GAS_BRIDGE_URL
     if not base_url:
         return {}
 
-    timetable_sheet_id = extract_sheet_id(term_settings.timetable_sheet_url)
-    attendance_sheet_id = extract_sheet_id(term_settings.attendance_sheet_url)
-    mess_menu_sheet_id = (
-        extract_sheet_id(term_settings.mess_menu_sheet_url)
-        or settings.MESS_MENU_SHEET_ID
-    )
-    birthday_sheet_id = (
-        extract_sheet_id(term_settings.birthday_sheet_url)
-        or settings.BIRTHDAY_SHEET_ID
-    )
+    timetable_sheet_id = extract_sheet_id(term_settings.timetable_sheet_url) if term_settings else ''
+    if not timetable_sheet_id:
+        timetable_sheet_id = extract_sheet_id(settings.TIMETABLE_SHEET_ID)
+
+    attendance_sheet_id = extract_sheet_id(term_settings.attendance_sheet_url) if term_settings else ''
+    if not attendance_sheet_id:
+        attendance_sheet_id = extract_sheet_id(settings.ATTENDANCE_SHEET_ID)
+
+    mess_menu_sheet_id = extract_sheet_id(term_settings.mess_menu_sheet_url) if term_settings else ''
+    if not mess_menu_sheet_id:
+        mess_menu_sheet_id = extract_sheet_id(settings.MESS_MENU_SHEET_ID)
+
+    birthday_sheet_id = extract_sheet_id(term_settings.birthday_sheet_url) if term_settings else ''
+    if not birthday_sheet_id:
+        birthday_sheet_id = extract_sheet_id(settings.BIRTHDAY_SHEET_ID)
 
     sources = [
         (timetable_sheet_id, TIMETABLE_SHEET_NAME),
@@ -1231,10 +1242,15 @@ def _fetch_google_payload(term_settings: TermSettings | None = None) -> dict[str
     has_sheet_ids = has_sheet_ids or bool(
         extract_sheet_id(settings_obj.birthday_sheet_url) if settings_obj else ''
     )
-    has_sheet_ids = has_sheet_ids or bool(settings.MESS_MENU_SHEET_ID or settings.BIRTHDAY_SHEET_ID)
+    has_sheet_ids = has_sheet_ids or bool(
+        extract_sheet_id(settings.TIMETABLE_SHEET_ID)
+        or extract_sheet_id(settings.ATTENDANCE_SHEET_ID)
+        or extract_sheet_id(settings.MESS_MENU_SHEET_ID)
+        or extract_sheet_id(settings.BIRTHDAY_SHEET_ID)
+    )
     if (settings.GAS_BRIDGE_BASE_URL or settings.GAS_BRIDGE_URL) and has_sheet_ids:
         try:
-            payload = _fetch_payload_by_sheet_ids(settings_obj) if settings_obj else {}
+            payload = _fetch_payload_by_sheet_ids(settings_obj)
             if payload:
                 return payload
             errors.append('sheet_id_fetch: empty payload')

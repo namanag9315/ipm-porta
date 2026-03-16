@@ -20,9 +20,12 @@ class AcademicCoreConfig(AppConfig):
         if not getattr(settings, 'AUTO_SYNC_FALLBACK_ENABLED', False):
             return
 
-        command = sys.argv[1] if len(sys.argv) > 1 else ''
-        is_runserver = command == 'runserver'
-        if not is_runserver:
+        command = os.path.basename(sys.argv[0]) if sys.argv else ''
+        subcommand = sys.argv[1] if len(sys.argv) > 1 else ''
+        is_runserver = command == 'manage.py' and subcommand == 'runserver'
+        is_gunicorn = 'gunicorn' in command
+        is_uvicorn = 'uvicorn' in command
+        if not (is_runserver or is_gunicorn or is_uvicorn):
             return
 
         # Django autoreloader starts two processes in DEBUG.
