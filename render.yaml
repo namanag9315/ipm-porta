@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: ipm-portal-api
+    env: python
+    plan: free
+    buildCommand: ./build.sh
+    startCommand: gunicorn ipm_portal.wsgi:application --bind 0.0.0.0:$PORT
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: ".onrender.com"
+      - key: CORS_ALLOW_ALL_ORIGINS
+        value: "False"
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: "https://*.onrender.com"
+      - key: DATABASE_URL
+        sync: false
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
