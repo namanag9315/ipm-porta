@@ -330,6 +330,10 @@ class TermSettingsSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    timetable_sheet_url = serializers.CharField(required=False, allow_blank=True)
+    attendance_sheet_url = serializers.CharField(required=False, allow_blank=True)
+    mess_menu_sheet_url = serializers.CharField(required=False, allow_blank=True)
+    birthday_sheet_url = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = TermSettings

@@ -552,7 +552,7 @@ def parse_consolidated_attendance_sheet(
             if not isinstance(row, (list, tuple)):
                 continue
 
-            roll_number = _safe_text(_cell_value(row, roll_column))
+            roll_number = _safe_text(_cell_value(row, roll_column)).upper()
             if (
                 not roll_number
                 or _is_non_data_row(roll_number)
@@ -573,17 +573,20 @@ def parse_consolidated_attendance_sheet(
                 'email': email,
             }
 
-            try:
-                student, created = Student.objects.get_or_create(
-                    roll_number=roll_number,
-                    defaults=defaults,
-                )
-            except IntegrityError:
-                defaults['email'] = _placeholder_email(roll_number)
-                student, created = Student.objects.get_or_create(
-                    roll_number=roll_number,
-                    defaults=defaults,
-                )
+            student = Student.objects.filter(roll_number__iexact=roll_number).first()
+            created = False
+            if student is None:
+                try:
+                    student, created = Student.objects.get_or_create(
+                        roll_number=roll_number,
+                        defaults=defaults,
+                    )
+                except IntegrityError:
+                    defaults['email'] = _placeholder_email(roll_number)
+                    student, created = Student.objects.get_or_create(
+                        roll_number=roll_number,
+                        defaults=defaults,
+                    )
 
             if created:
                 student.set_password(f'IIM@{roll_number}')
@@ -694,7 +697,7 @@ def parse_attendance(
                 if not isinstance(row, (list, tuple)):
                     continue
 
-                roll_number = _safe_text(_cell_value(row, roll_column))
+                roll_number = _safe_text(_cell_value(row, roll_column)).upper()
                 if (
                     not roll_number
                     or _is_non_data_row(roll_number)
@@ -712,15 +715,18 @@ def parse_attendance(
                 max_delivered_for_course = max(max_delivered_for_course, total_delivered)
                 student_batch = _resolve_student_batch(roll_number, fallback_batch=batch)
 
-                student, created = Student.objects.get_or_create(
-                    roll_number=roll_number,
-                    defaults={
-                        'batch': student_batch,
-                        'name': student_name[:100],
-                        'section': section or 'A',
-                        'email': _placeholder_email(roll_number),
-                    },
-                )
+                student = Student.objects.filter(roll_number__iexact=roll_number).first()
+                created = False
+                if student is None:
+                    student, created = Student.objects.get_or_create(
+                        roll_number=roll_number,
+                        defaults={
+                            'batch': student_batch,
+                            'name': student_name[:100],
+                            'section': section or 'A',
+                            'email': _placeholder_email(roll_number),
+                        },
+                    )
                 if created:
                     stats['students_created'] += 1
                 else:

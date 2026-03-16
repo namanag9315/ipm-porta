@@ -531,7 +531,7 @@ def _student_from_request(request) -> tuple[Student | None, Response | None]:
             ),
         )
 
-    student = Student.objects.filter(roll_number=roll_number).first()
+    student = Student.objects.filter(roll_number__iexact=roll_number).first()
     if student is None:
         return (
             None,
@@ -831,6 +831,10 @@ def login_admin(request) -> Response:
         )
 
     user = authenticate(request=request, username=username, password=password)
+    if user is None:
+        fallback_user = User.objects.filter(username__iexact=username).first()
+        if fallback_user and fallback_user.check_password(password):
+            user = fallback_user
     if user is None or not user.is_active or not user.is_staff:
         return Response({'detail': 'Invalid admin credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
 

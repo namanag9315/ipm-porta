@@ -139,14 +139,28 @@ export default function IPMODashboard() {
         ...settingsForm,
         batch_code: selectedBatch,
       })
-      await adminApi.post(
-        '/api/v1/admin/run-sync/',
-        { mode: 'sync', batch_code: selectedBatch },
-        { timeout: 180000 },
-      )
-      setSuccess('Settings saved and sync triggered successfully.')
+      try {
+        await adminApi.post(
+          '/api/v1/admin/run-sync/',
+          { mode: 'sync', batch_code: selectedBatch },
+          { timeout: 180000 },
+        )
+        setSuccess('Settings saved and sync triggered successfully.')
+      } catch (syncError) {
+        const syncMessage =
+          syncError?.response?.data?.detail || 'Sync failed after saving settings.'
+        setSuccess(`Settings saved, but sync failed: ${syncMessage}`)
+      }
     } catch (saveError) {
-      setError(saveError?.response?.data?.detail || 'Failed to save settings and trigger sync.')
+      const errorData = saveError?.response?.data
+      if (errorData && typeof errorData === 'object' && !Array.isArray(errorData)) {
+        const fieldErrors = Object.entries(errorData)
+          .map(([field, messages]) => `${field}: ${Array.isArray(messages) ? messages.join(', ') : messages}`)
+          .join(' | ')
+        setError(fieldErrors || 'Failed to save settings.')
+      } else {
+        setError(saveError?.response?.data?.detail || 'Failed to save settings.')
+      }
     } finally {
       setSaving(false)
     }
@@ -431,7 +445,7 @@ export default function IPMODashboard() {
                 />
               </label>
               <label className="block text-sm text-slate-300">
-                Timetable Sheet URL
+                Timetable Sheet URL or ID
                 <input
                   type="url"
                   value={settingsForm.timetable_sheet_url}
@@ -442,7 +456,7 @@ export default function IPMODashboard() {
                 />
               </label>
               <label className="block text-sm text-slate-300">
-                Attendance Sheet URL
+                Attendance Sheet URL or ID
                 <input
                   type="url"
                   value={settingsForm.attendance_sheet_url}
@@ -453,7 +467,7 @@ export default function IPMODashboard() {
                 />
               </label>
               <label className="block text-sm text-slate-300">
-                Mess Menu Sheet URL
+                Mess Menu Sheet URL or ID
                 <input
                   type="url"
                   value={settingsForm.mess_menu_sheet_url}
@@ -464,7 +478,7 @@ export default function IPMODashboard() {
                 />
               </label>
               <label className="block text-sm text-slate-300">
-                Birthday Sheet URL
+                Birthday Sheet URL or ID
                 <input
                   type="url"
                   value={settingsForm.birthday_sheet_url}
