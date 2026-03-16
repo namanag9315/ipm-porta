@@ -105,7 +105,9 @@ export default function IPMODashboard() {
         adminApi.get('/api/v1/admin/students/', {
           params: resolvedBatch ? { batch_code: resolvedBatch } : undefined,
         }),
-        adminApi.get('/api/v1/admin/courses/'),
+        adminApi.get('/api/v1/admin/courses/', {
+          params: resolvedBatch ? { batch_code: resolvedBatch } : undefined,
+        }),
       ])
       setSettingsForm({
         current_term_name: settingsRes.data?.current_term_name || '',

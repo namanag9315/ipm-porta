@@ -1301,8 +1301,14 @@ def admin_courses(request) -> Response:
     if error_response:
         return error_response
 
+    batch_code = _normalize_batch_code(request.query_params.get('batch_code'))
+
     if request.method == 'GET':
-        courses = Course.objects.order_by('code')
+        course_qs = Course.objects.all()
+        if batch_code:
+            course_qs = course_qs.filter(studentcourse__batch_id=batch_code).distinct()
+        
+        courses = course_qs.order_by('code')
         serializer = CourseSerializer(courses, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
