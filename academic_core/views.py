@@ -6,6 +6,7 @@ import secrets
 from zoneinfo import ZoneInfo
 
 import requests
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
@@ -866,13 +867,27 @@ def admin_run_sync(request) -> Response:
     if error_response:
         return error_response
 
-    mode = str(request.data.get('mode', 'async')).strip().lower()
+    mode = str(request.data.get('mode', 'sync')).strip().lower()
     batch_code = _normalize_batch_code(request.data.get('batch_code'))
     if mode not in {'async', 'sync'}:
         return Response(
             {'detail': 'Invalid mode. Use "async" or "sync".'},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    if mode == 'async':
+        broker_url = str(getattr(settings, 'CELERY_BROKER_URL', '') or '').strip().lower()
+        if broker_url.startswith('redis://127.0.0.1') or broker_url.startswith('redis://localhost'):
+            return Response(
+                {
+                    'detail': (
+                        'Async mode requires a running Celery worker and Redis broker. '
+                        'Current broker points to localhost. Use mode="sync" for first-time deployment '
+                        'or configure hosted Redis + worker.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     if mode == 'sync':
         result = sync_google_sheets_data(batch_code=batch_code or None)
