@@ -167,13 +167,37 @@ def _parse_time_slot(slot_text: str) -> tuple[time, time] | None:
     return start, end
 
 
-def _infer_course_from_text(raw_text: str, course_map: dict[str, Course]) -> Course | None:
+def _normalize_course_name_for_match(value: Any) -> str:
+    text = _safe_text(value).lower()
+    if not text:
+        return ''
+    text = re.sub(r'[^a-z0-9]+', ' ', text)
+    text = re.sub(
+        r'\b(elective|core|course|batch|section|sec|term|trimester|trim|semester|sem|group|class|paper)\b',
+        '',
+        text,
+    )
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def _infer_course_from_text(
+    raw_text: str,
+    course_map: dict[str, Course],
+    course_name_map: dict[str, Course] | None = None,
+) -> Course | None:
     upper_text = raw_text.upper()
     if 'TP' in course_map and re.search(r'\bT\s*&\s*P\b', upper_text):
         return course_map['TP']
     for code in sorted(course_map, key=len, reverse=True):
         if re.search(rf'\b{re.escape(code)}\b', upper_text):
             return course_map[code]
+    if course_name_map:
+        normalized_text = _normalize_course_name_for_match(raw_text)
+        if normalized_text:
+            for name_key, course in course_name_map.items():
+                if len(name_key) >= 4 and name_key in normalized_text:
+                    return course
     return None
 
 
@@ -439,7 +463,13 @@ def parse_timetable(sheet_data: list[dict[str, Any]], *, batch: Batch | None = N
         'technology and politics': 'TP',
     }
 
-    course_by_code = {course.code.upper(): course for course in Course.objects.all()}
+    courses = list(Course.objects.all())
+    course_by_code = {course.code.upper(): course for course in courses}
+    course_by_name: dict[str, Course] = {}
+    for course in courses:
+        key = _normalize_course_name_for_match(course.name)
+        if key and key not in course_by_name:
+            course_by_name[key] = course
 
     for item in sheet_data:
         try:
@@ -473,7 +503,7 @@ def parse_timetable(sheet_data: list[dict[str, Any]], *, batch: Batch | None = N
 
             is_exam = bool(EXAM_PATTERN.search(raw_text))
 
-            matched_course = _infer_course_from_text(raw_text, course_by_code)
+            matched_course = _infer_course_from_text(raw_text, course_by_code, course_by_name)
             if not matched_course:
                 lower_text = raw_text.lower()
                 for full_name, code in exam_name_map.items():
@@ -890,7 +920,9 @@ def parse_mess_menu(sheet_data: list[list[Any]], *, batch: Batch | None = None) 
         menu_scope = MessMenu.objects.filter(batch=batch) if batch else MessMenu.objects.all()
         deleted_count = 0
         if menu_rows:
-            deleted_count, _ = menu_scope.filter(date__gte=timezone.localdate()).delete()
+            target_dates = sorted({item.date for item in menu_rows if item.date})
+            if target_dates:
+                deleted_count, _ = menu_scope.filter(date__in=target_dates).delete()
             MessMenu.objects.bulk_create(menu_rows, batch_size=500)
 
     stats['deleted'] = deleted_count
