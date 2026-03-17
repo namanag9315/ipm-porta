@@ -15,6 +15,7 @@ from pathlib import Path
 
 from celery.schedules import crontab
 import dj_database_url
+from corsheaders.defaults import default_headers
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -186,6 +187,7 @@ CORS_ALLOWED_ORIGINS = [
     for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
     if origin.strip()
 ]
+CORS_ALLOW_HEADERS = list(default_headers) + ['x-batch-code', 'x-student-roll-number']
 
 GAS_BRIDGE_BASE_URL = os.getenv('GAS_BRIDGE_BASE_URL', '')
 GAS_BRIDGE_URL = os.getenv('GAS_BRIDGE_URL', GAS_BRIDGE_BASE_URL)
