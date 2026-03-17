@@ -320,14 +320,14 @@ def _count_attendance_marks(values: list[Any]) -> tuple[int, int, int]:
     l_count = 0
 
     for value in values:
-        marker = _safe_text(value).upper()
-        if marker not in ATTENDANCE_MARKERS:
+        marker = _safe_text(value).strip().upper()
+        if not marker or marker in {'-', 'NA', 'N/A', 'NONE', 'NAN'}:
             continue
-        if marker == 'P':
+        if marker in {'P', 'PRESENT', 'PR', '1', 'Y', 'YES', 'OD', 'ML', 'S', 'E'}:
             p_count += 1
-        elif marker == 'A':
+        elif marker in {'A', 'ABSENT', '0', 'N', 'NO'}:
             a_count += 1
-        elif marker == 'L':
+        elif marker in {'L', 'LATE'}:
             l_count += 1
 
     return p_count, a_count, l_count
@@ -675,8 +675,6 @@ def parse_attendance(
             or 'mess' in normalized_name
             or 'feedback' in normalized_name
             or 'participant' in normalized_name
-            or 'section a' in normalized_name
-            or 'section b' in normalized_name
             or 'group email' in normalized_name
             or 'book' in normalized_name
             or 'contact' in normalized_name
@@ -694,6 +692,8 @@ def parse_attendance(
         roll_column = _find_column_index(headers, {'roll no', 'roll no.', 'roll number'})
         name_column = _find_column_index(headers, {'student name', 'name'})
         if roll_column is None:
+            continue
+        if not _has_attendance_markers(sheet_data, header_index, roll_column):
             continue
         course_code = _infer_course_code_from_sheet_name(sheet_name)
         if not course_code:
@@ -744,6 +744,14 @@ def parse_attendance(
                 percentage = (total_attended / total_delivered * 100.0) if total_delivered else 0.0
                 max_delivered_for_course = max(max_delivered_for_course, total_delivered)
                 student_batch = _resolve_student_batch(roll_number, fallback_batch=batch)
+
+                if total_delivered == 0:
+                    non_empty_marks = any(
+                        _safe_text(value).strip().upper() not in {'', '-', 'NA', 'N/A', 'NONE', 'NAN'}
+                        for value in attendance_slice
+                    )
+                    if not non_empty_marks:
+                        continue
 
                 student = Student.objects.filter(roll_number__iexact=roll_number).first()
                 created = False
