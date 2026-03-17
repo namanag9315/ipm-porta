@@ -788,7 +788,7 @@ def parse_attendance(
 
         stats['sheets_processed'] += 1
 
-    if valid_course_codes:
+    if valid_course_codes and getattr(settings, 'ATTENDANCE_CLEANUP_ENABLED', True):
         attendance_scope = AttendanceRecord.objects.filter(batch=batch) if batch else AttendanceRecord.objects.all()
         mapping_scope = StudentCourse.objects.filter(batch=batch) if batch else StudentCourse.objects.all()
         with transaction.atomic():
@@ -888,8 +888,9 @@ def parse_mess_menu(sheet_data: list[list[Any]], *, batch: Batch | None = None) 
 
     with transaction.atomic():
         menu_scope = MessMenu.objects.filter(batch=batch) if batch else MessMenu.objects.all()
-        deleted_count, _ = menu_scope.filter(date__gte=timezone.localdate()).delete()
+        deleted_count = 0
         if menu_rows:
+            deleted_count, _ = menu_scope.filter(date__gte=timezone.localdate()).delete()
             MessMenu.objects.bulk_create(menu_rows, batch_size=500)
 
     stats['deleted'] = deleted_count
