@@ -19,6 +19,8 @@ import { cn } from '../lib/cn'
 import { combineDateAndTime, formatDateLabel, formatTimeLabel, toIsoDate } from '../lib/date'
 
 const MAX_DASHBOARD_CLASSES = 3
+const DASHBOARD_PRIMARY_TIMEOUT_MS = 15000
+const DASHBOARD_SECONDARY_TIMEOUT_MS = 9000
 const COURSE_COLOR_CLASSES = [
   'border-l-blue-500',
   'border-l-emerald-500',
@@ -216,24 +218,25 @@ export default function Dashboard() {
       setError('')
 
       try {
-        const menuDates = Array.from({ length: 3 }).map((_, index) => {
+        const menuDates = Array.from({ length: 2 }).map((_, index) => {
           const date = new Date()
           date.setDate(date.getDate() + index)
           return toIsoDate(date)
         })
 
-        const results = await Promise.allSettled([
-          api.get(`/api/v1/attendance/${user.rollNumber}/`, { signal: controller.signal }),
-          api.get(`/api/v1/timetable/${user.rollNumber}/`, { signal: controller.signal }),
-          api.get('/api/v1/dashboard-extras/', { signal: controller.signal }),
-          ...menuDates.map((dateIso) =>
-            api.get(`/api/v1/mess-menu/?date=${dateIso}&template_fallback=1`, { signal: controller.signal }),
-          ),
+        const [attendanceResult, timetableResult] = await Promise.allSettled([
+          api.get(`/api/v1/attendance/${user.rollNumber}/`, {
+            signal: controller.signal,
+            timeout: DASHBOARD_PRIMARY_TIMEOUT_MS,
+          }),
+          api.get(`/api/v1/timetable/${user.rollNumber}/`, {
+            signal: controller.signal,
+            timeout: DASHBOARD_PRIMARY_TIMEOUT_MS,
+          }),
         ])
-        const attendanceRes = results[0]?.status === 'fulfilled' ? results[0].value : null
-        const timetableRes = results[1]?.status === 'fulfilled' ? results[1].value : null
-        const extrasRes = results[2]?.status === 'fulfilled' ? results[2].value : null
-        const menuResponses = results.slice(3)
+
+        const attendanceRes = attendanceResult.status === 'fulfilled' ? attendanceResult.value : null
+        const timetableRes = timetableResult.status === 'fulfilled' ? timetableResult.value : null
 
         if (attendanceRes) {
           setAttendance(Array.isArray(attendanceRes.data) ? attendanceRes.data : [])
@@ -246,6 +249,27 @@ export default function Dashboard() {
         } else {
           setSessions([])
         }
+
+        if (!attendanceRes || !timetableRes) {
+          setError('Some core dashboard data could not be loaded yet. Please refresh in a moment.')
+        }
+        setLoading(false)
+
+        const secondaryResults = await Promise.allSettled([
+          api.get('/api/v1/dashboard-extras/', {
+            signal: controller.signal,
+            timeout: DASHBOARD_SECONDARY_TIMEOUT_MS,
+          }),
+          ...menuDates.map((dateIso) =>
+            api.get(`/api/v1/mess-menu/?date=${dateIso}&template_fallback=1`, {
+              signal: controller.signal,
+              timeout: DASHBOARD_SECONDARY_TIMEOUT_MS,
+            }),
+          ),
+        ])
+
+        const extrasRes = secondaryResults[0]?.status === 'fulfilled' ? secondaryResults[0].value : null
+        const menuResponses = secondaryResults.slice(1)
 
         if (extrasRes) {
           setBirthdaysToday(Array.isArray(extrasRes.data?.birthdays_today) ? extrasRes.data.birthdays_today : [])
@@ -273,13 +297,14 @@ export default function Dashboard() {
           }))
         })
         setMessItems(flattenedMenus)
-        const hadFailures = results.some((result) => result.status === 'rejected')
-        if (hadFailures) {
-          setError('Some dashboard data could not be loaded yet. Please refresh in a moment.')
+        const hadSecondaryFailures = secondaryResults.some((result) => result.status === 'rejected')
+        if (hadSecondaryFailures) {
+          setError((current) => current || 'Some dashboard widgets are still loading. Refresh in a moment.')
         }
       } catch (fetchError) {
         if (fetchError.name !== 'CanceledError') {
           setError('Unable to load dashboard data right now.')
+          setLoading(false)
         }
       } finally {
         setLoading(false)

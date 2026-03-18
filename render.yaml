@@ -32,6 +32,8 @@ services:
         sync: false
       - key: ONLY_BATCH_CODE
         sync: false
+      - key: AUTO_SYNC_FALLBACK_ENABLED
+        value: "False"
       - key: ATTENDANCE_CLEANUP_ENABLED
         sync: false
       - key: DATABASE_URL
