@@ -1,5 +1,7 @@
+from contextlib import contextmanager
 import logging
 import re
+import zlib
 from datetime import date, time
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -10,7 +12,8 @@ from celery import shared_task
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
+from django.db.models.functions import Upper
 from django.utils import timezone
 
 from academic_core.models import (
@@ -79,6 +82,7 @@ COURSE_CREDIT_OVERRIDES: dict[str, int] = {
     'DES': 4,
     'QMP': 2,
 }
+SYNC_ADVISORY_LOCK_NAMESPACE = 73159
 
 
 def _resolve_student_batch(roll_number: str, fallback_batch: Batch | None = None) -> Batch | None:
@@ -101,6 +105,46 @@ def _safe_text(value: Any) -> str:
     if isinstance(value, float) and pd.isna(value):
         return ''
     return str(value).strip()
+
+
+@contextmanager
+def _sync_advisory_lock(batch_code: str | None):
+    if connection.vendor != 'postgresql':
+        yield True
+        return
+
+    normalized_batch_code = str(batch_code or 'all').strip().upper() or 'ALL'
+    lock_key = zlib.crc32(normalized_batch_code.encode('utf-8'))
+    acquired = False
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT pg_try_advisory_lock(%s, %s)',
+                [SYNC_ADVISORY_LOCK_NAMESPACE, lock_key],
+            )
+            row = cursor.fetchone()
+            acquired = bool(row and row[0])
+    except Exception:
+        logger.exception('Failed to acquire sync advisory lock; continuing without lock.')
+        yield True
+        return
+
+    if not acquired:
+        yield False
+        return
+
+    try:
+        yield True
+    finally:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    'SELECT pg_advisory_unlock(%s, %s)',
+                    [SYNC_ADVISORY_LOCK_NAMESPACE, lock_key],
+                )
+        except Exception:
+            logger.exception('Failed to release sync advisory lock.')
 
 
 def _normalize_header(value: Any) -> str:
@@ -705,6 +749,8 @@ def parse_attendance(
     if not isinstance(json_payload, dict):
         return stats
     valid_course_codes: set[str] = set()
+    student_cache: dict[str, Student] = {}
+    course_cache: dict[str, Course] = {}
 
     for sheet_name, sheet_data in json_payload.items():
         normalized_name = sheet_name.strip().lower()
@@ -742,13 +788,16 @@ def parse_attendance(
         normalized_course_code = course_code.upper()
         configured_credits = COURSE_CREDIT_OVERRIDES.get(normalized_course_code, 0)
 
-        course, _ = Course.objects.get_or_create(
-            code=course_code,
-            defaults={
-                'name': normalized_course_name[:150],
-                'credits': configured_credits,
-            },
-        )
+        course = course_cache.get(normalized_course_code)
+        if course is None:
+            course, _ = Course.objects.get_or_create(
+                code=course_code,
+                defaults={
+                    'name': normalized_course_name[:150],
+                    'credits': configured_credits,
+                },
+            )
+            course_cache[normalized_course_code] = course
         course_update_fields: list[str] = []
         if normalized_course_name and course.name != normalized_course_name[:150]:
             course.name = normalized_course_name[:150]
@@ -761,7 +810,7 @@ def parse_attendance(
         valid_course_codes.add(course.code)
         section = _infer_section_from_sheet_name(sheet_name)
         max_delivered_for_course = 0
-
+        parsed_rows: dict[str, dict[str, Any]] = {}
         for row in sheet_data[header_index + 1 :]:
             try:
                 if not isinstance(row, (list, tuple)):
@@ -776,7 +825,6 @@ def parse_attendance(
                     continue
 
                 student_name = _safe_text(_cell_value(row, name_column)) or roll_number
-
                 attendance_slice = [_cell_value(row, column_index) for column_index in mark_columns]
                 present_count, absent_count, late_count = _count_attendance_marks(attendance_slice)
                 total_delivered = present_count + absent_count + late_count
@@ -793,65 +841,163 @@ def parse_attendance(
                     if not non_empty_marks:
                         continue
 
-                student = Student.objects.filter(roll_number__iexact=roll_number).first()
-                created = False
-                if student is None:
-                    student, created = Student.objects.get_or_create(
-                        roll_number=roll_number,
-                        defaults={
-                            'batch': student_batch,
-                            'name': student_name[:100],
-                            'section': section or 'A',
-                            'email': _placeholder_email(roll_number),
-                        },
-                    )
-                if created:
-                    stats['students_created'] += 1
-                else:
-                    update_fields: list[str] = []
-                    if student_name and student.name != student_name[:100]:
-                        student.name = student_name[:100]
-                        update_fields.append('name')
-                    if student_batch and student.batch_id != student_batch.code:
-                        student.batch = student_batch
-                        update_fields.append('batch')
-                    if section and student.section != section:
-                        student.section = section
-                        update_fields.append('section')
-                    if not student.email:
-                        student.email = _placeholder_email(roll_number)
-                        update_fields.append('email')
-                    if update_fields:
-                        student.save(update_fields=update_fields)
-
-                mapping, mapping_created = StudentCourse.objects.get_or_create(
-                    student=student,
-                    course=course,
-                    defaults={'batch': student_batch or batch},
-                )
-                if mapping_created:
-                    stats['student_course_mappings_created'] += 1
-                elif (student_batch or batch) and mapping.batch_id != (student_batch or batch).code:
-                    mapping.batch = student_batch or batch
-                    mapping.save(update_fields=['batch'])
-
-                AttendanceRecord.objects.update_or_create(
-                    student=student,
-                    course=course,
-                    defaults={
-                        'batch': batch,
-                        'total_delivered': total_delivered,
-                        'total_attended': total_attended,
-                        'percentage': round(percentage, 2),
-                    },
-                )
-                stats['records_upserted'] += 1
+                parsed_rows[roll_number] = {
+                    'student_name': student_name[:100],
+                    'student_batch': student_batch,
+                    'section': section,
+                    'total_delivered': total_delivered,
+                    'total_attended': total_attended,
+                    'percentage': round(percentage, 2),
+                }
             except Exception:
                 stats['errors'] += 1
                 logger.exception(
                     'Error while parsing attendance row for sheet "%s".',
                     sheet_name,
                 )
+
+        if parsed_rows:
+            roll_numbers = list(parsed_rows.keys())
+            sync_timestamp = timezone.now()
+            missing_roll_numbers = [roll for roll in roll_numbers if roll not in student_cache]
+            if missing_roll_numbers:
+                for student in Student.objects.annotate(roll_upper=Upper('roll_number')).filter(
+                    roll_upper__in=missing_roll_numbers
+                ):
+                    student_cache[student.roll_upper] = student
+
+            students_to_create: list[Student] = []
+            students_to_update: list[Student] = []
+            for roll_number, row_data in parsed_rows.items():
+                student = student_cache.get(roll_number)
+                student_batch = row_data['student_batch']
+                row_section = row_data['section']
+                if student is None:
+                    students_to_create.append(
+                        Student(
+                            roll_number=roll_number,
+                            batch=student_batch,
+                            name=row_data['student_name'],
+                            section=row_section or 'A',
+                            email=_placeholder_email(roll_number),
+                        )
+                    )
+                    continue
+
+                has_updates = False
+                if row_data['student_name'] and student.name != row_data['student_name']:
+                    student.name = row_data['student_name']
+                    has_updates = True
+                if student_batch and student.batch_id != student_batch.code:
+                    student.batch = student_batch
+                    has_updates = True
+                if row_section and student.section != row_section:
+                    student.section = row_section
+                    has_updates = True
+                if not student.email:
+                    student.email = _placeholder_email(roll_number)
+                    has_updates = True
+                if has_updates:
+                    students_to_update.append(student)
+
+            if students_to_create:
+                Student.objects.bulk_create(
+                    students_to_create,
+                    batch_size=500,
+                    ignore_conflicts=True,
+                )
+                stats['students_created'] += len(students_to_create)
+                created_roll_numbers = [student.roll_number for student in students_to_create]
+                for student in Student.objects.annotate(roll_upper=Upper('roll_number')).filter(
+                    roll_upper__in=created_roll_numbers
+                ):
+                    student_cache[student.roll_upper] = student
+
+            if students_to_update:
+                Student.objects.bulk_update(
+                    students_to_update,
+                    ['name', 'batch', 'section', 'email'],
+                    batch_size=500,
+                )
+
+            sheet_students: dict[str, Student] = {}
+            unresolved_rolls = [roll for roll in roll_numbers if roll not in student_cache]
+            if unresolved_rolls:
+                for student in Student.objects.annotate(roll_upper=Upper('roll_number')).filter(
+                    roll_upper__in=unresolved_rolls
+                ):
+                    student_cache[student.roll_upper] = student
+
+            for roll_number in roll_numbers:
+                student = student_cache.get(roll_number)
+                if student:
+                    sheet_students[roll_number] = student
+
+            if sheet_students:
+                student_ids = [student.roll_number for student in sheet_students.values()]
+                existing_mapping_student_ids = set(
+                    StudentCourse.objects.filter(course=course, student_id__in=student_ids).values_list(
+                        'student_id',
+                        flat=True,
+                    )
+                )
+                mapping_upserts: list[StudentCourse] = []
+                attendance_upserts: list[AttendanceRecord] = []
+
+                for roll_number, row_data in parsed_rows.items():
+                    student = sheet_students.get(roll_number)
+                    if not student:
+                        continue
+
+                    mapping_batch = row_data['student_batch'] or batch
+                    mapping_upserts.append(
+                        StudentCourse(
+                            student=student,
+                            course=course,
+                            batch=mapping_batch,
+                            created_at=sync_timestamp,
+                        )
+                    )
+                    attendance_upserts.append(
+                        AttendanceRecord(
+                            batch=batch,
+                            student=student,
+                            course=course,
+                            total_delivered=row_data['total_delivered'],
+                            total_attended=row_data['total_attended'],
+                            percentage=row_data['percentage'],
+                            last_updated=sync_timestamp,
+                        )
+                    )
+
+                if mapping_upserts:
+                    StudentCourse.objects.bulk_create(
+                        mapping_upserts,
+                        batch_size=500,
+                        update_conflicts=True,
+                        unique_fields=['student', 'course'],
+                        update_fields=['batch'],
+                    )
+                    created_mapping_count = sum(
+                        1 for mapping in mapping_upserts if mapping.student_id not in existing_mapping_student_ids
+                    )
+                    stats['student_course_mappings_created'] += created_mapping_count
+
+                if attendance_upserts:
+                    AttendanceRecord.objects.bulk_create(
+                        attendance_upserts,
+                        batch_size=500,
+                        update_conflicts=True,
+                        unique_fields=['student', 'course'],
+                        update_fields=[
+                            'batch',
+                            'total_delivered',
+                            'total_attended',
+                            'percentage',
+                            'last_updated',
+                        ],
+                    )
+                    stats['records_upserted'] += len(attendance_upserts)
 
         inferred_credits = _infer_credits_from_total_delivered(max_delivered_for_course)
         should_update_credits = (
@@ -1388,50 +1534,54 @@ def _merge_stat_bucket(aggregate: dict[str, Any], section: str, stats: dict[str,
 def sync_google_sheets_data(batch_code: str | None = None) -> dict[str, Any]:
     result: dict[str, Any] = _initial_sync_stats()
     result['batches'] = {}
-
-    term_settings_qs = TermSettings.objects.select_related('batch').order_by('batch__code')
-    if batch_code:
-        term_settings_qs = term_settings_qs.filter(batch__code=batch_code)
-    else:
-        term_settings_qs = term_settings_qs.filter(batch__is_active=True)
-    term_settings_list = list(term_settings_qs)
-
-    if not term_settings_list:
-        try:
-            payload = _fetch_google_payload()
-        except Exception as exc:
-            logger.exception('Failed to fetch data from GAS bridge.')
-            result['errors'].append(f'fetch_failed: {exc}')
+    with _sync_advisory_lock(batch_code) as lock_acquired:
+        if not lock_acquired:
+            result['status'] = 'skipped_locked'
+            result['errors'].append('sync_locked: another sync is already running')
             return result
-        term_settings_list = []
-        fallback_batch = Batch.objects.filter(is_active=True).order_by('code').first()
-        result['batches']['default'] = _sync_payload_for_batch(payload, fallback_batch)
-        for section in ('consolidated', 'timetable', 'attendance', 'mess_menu', 'birthdays'):
-            _merge_stat_bucket(result, section, result['batches']['default'].get(section, {}))
-        result['errors'].extend(result['batches']['default'].get('errors', []))
-        result['status'] = 'completed_with_errors' if result['errors'] else 'completed'
-        return result
 
-    for settings_obj in term_settings_list:
-        batch = settings_obj.batch
-        batch_key = batch.code if batch else 'default'
-        try:
-            payload = _fetch_google_payload(settings_obj)
-        except Exception as exc:
-            logger.exception('Failed to fetch data from GAS bridge for batch %s.', batch_key)
-            batch_result = _initial_sync_stats()
-            batch_result['errors'].append(f'fetch_failed: {exc}')
+        term_settings_qs = TermSettings.objects.select_related('batch').order_by('batch__code')
+        if batch_code:
+            term_settings_qs = term_settings_qs.filter(batch__code=batch_code)
+        else:
+            term_settings_qs = term_settings_qs.filter(batch__is_active=True)
+        term_settings_list = list(term_settings_qs)
+
+        if not term_settings_list:
+            try:
+                payload = _fetch_google_payload()
+            except Exception as exc:
+                logger.exception('Failed to fetch data from GAS bridge.')
+                result['errors'].append(f'fetch_failed: {exc}')
+                return result
+            fallback_batch = Batch.objects.filter(is_active=True).order_by('code').first()
+            result['batches']['default'] = _sync_payload_for_batch(payload, fallback_batch)
+            for section in ('consolidated', 'timetable', 'attendance', 'mess_menu', 'birthdays'):
+                _merge_stat_bucket(result, section, result['batches']['default'].get(section, {}))
+            result['errors'].extend(result['batches']['default'].get('errors', []))
+            result['status'] = 'completed_with_errors' if result['errors'] else 'completed'
+            return result
+
+        for settings_obj in term_settings_list:
+            batch = settings_obj.batch
+            batch_key = batch.code if batch else 'default'
+            try:
+                payload = _fetch_google_payload(settings_obj)
+            except Exception as exc:
+                logger.exception('Failed to fetch data from GAS bridge for batch %s.', batch_key)
+                batch_result = _initial_sync_stats()
+                batch_result['errors'].append(f'fetch_failed: {exc}')
+                result['batches'][batch_key] = batch_result
+                result['errors'].append(f'[{batch_key}] fetch_failed: {exc}')
+                continue
+
+            batch_result = _sync_payload_for_batch(payload, batch)
             result['batches'][batch_key] = batch_result
-            result['errors'].append(f'[{batch_key}] fetch_failed: {exc}')
-            continue
+            for section in ('consolidated', 'timetable', 'attendance', 'mess_menu', 'birthdays'):
+                _merge_stat_bucket(result, section, batch_result.get(section, {}))
+            result['errors'].extend([f'[{batch_key}] {error}' for error in batch_result.get('errors', [])])
 
-        batch_result = _sync_payload_for_batch(payload, batch)
-        result['batches'][batch_key] = batch_result
-        for section in ('consolidated', 'timetable', 'attendance', 'mess_menu', 'birthdays'):
-            _merge_stat_bucket(result, section, batch_result.get(section, {}))
-        result['errors'].extend([f'[{batch_key}] {error}' for error in batch_result.get('errors', [])])
-
-    result['status'] = 'completed_with_errors' if result['errors'] else 'completed'
+        result['status'] = 'completed_with_errors' if result['errors'] else 'completed'
     return result
 
 
