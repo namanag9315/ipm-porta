@@ -28,6 +28,10 @@ services:
         sync: false
       - key: BIRTHDAY_SHEET_ID
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-1.5-flash
       - key: DEFAULT_BATCH_CODE
         sync: false
       - key: ONLY_BATCH_CODE

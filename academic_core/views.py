@@ -392,7 +392,11 @@ def _reorder_materials_with_ai(materials: list[CourseMaterial]) -> list[int]:
 
 
 def _generate_gemini_draft(prompt: str) -> str:
-    api_key = os.getenv('GEMINI_API_KEY', '').strip()
+    api_key = (
+        os.getenv('GEMINI_API_KEY', '').strip()
+        or os.getenv('GOOGLE_API_KEY', '').strip()
+        or os.getenv('GEMENI_API_KEY', '').strip()
+    )
     if not api_key:
         raise ValueError('GEMINI_API_KEY is not configured.')
 
