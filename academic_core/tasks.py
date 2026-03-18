@@ -751,6 +751,16 @@ def parse_attendance(
                         for value in attendance_slice
                     )
                     if not non_empty_marks:
+                        # Still create the StudentCourse mapping even with 0 marks,
+                        # so the student's timetable is properly filtered.
+                        student = Student.objects.filter(roll_number__iexact=roll_number).first()
+                        if student is not None:
+                            student_batch_zero = _resolve_student_batch(roll_number, fallback_batch=batch)
+                            StudentCourse.objects.get_or_create(
+                                student=student,
+                                course=course,
+                                defaults={'batch': student_batch_zero or batch},
+                            )
                         continue
 
                 student = Student.objects.filter(roll_number__iexact=roll_number).first()
@@ -826,7 +836,9 @@ def parse_attendance(
 
         stats['sheets_processed'] += 1
 
-    if valid_course_codes and getattr(settings, 'ATTENDANCE_CLEANUP_ENABLED', True):
+    # Only run stale cleanup if we actually processed at least one sheet successfully.
+    # This prevents wiping valid mappings when a sheet fails to sync (network error, etc.).
+    if valid_course_codes and stats['sheets_processed'] > 0 and getattr(settings, 'ATTENDANCE_CLEANUP_ENABLED', True):
         attendance_scope = AttendanceRecord.objects.filter(batch=batch) if batch else AttendanceRecord.objects.all()
         mapping_scope = StudentCourse.objects.filter(batch=batch) if batch else StudentCourse.objects.all()
         with transaction.atomic():
@@ -1402,6 +1414,14 @@ def _sync_payload_for_batch(payload: dict[str, list[list[Any]]], batch: Batch | 
         logger.exception('parse_consolidated_attendance_sheet failed.')
         batch_result['errors'].append(f'parse_consolidated_failed: {exc}')
 
+    # IMPORTANT: Run attendance BEFORE timetable so that Course records exist in the DB
+    # when timetable parsing tries to match session text to courses.
+    try:
+        batch_result['attendance'] = parse_attendance(payload, batch=batch)
+    except Exception as exc:
+        logger.exception('parse_attendance failed.')
+        batch_result['errors'].append(f'parse_attendance_failed: {exc}')
+
     try:
         timetable_raw = (
             payload.get('Time table')
@@ -1418,12 +1438,6 @@ def _sync_payload_for_batch(payload: dict[str, list[list[Any]]], batch: Batch | 
     except Exception as exc:
         logger.exception('parse_timetable failed.')
         batch_result['errors'].append(f'parse_timetable_failed: {exc}')
-
-    try:
-        batch_result['attendance'] = parse_attendance(payload, batch=batch)
-    except Exception as exc:
-        logger.exception('parse_attendance failed.')
-        batch_result['errors'].append(f'parse_attendance_failed: {exc}')
 
     try:
         mess_menu_payload = (

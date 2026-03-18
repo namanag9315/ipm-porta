@@ -530,13 +530,10 @@ def _serialize_poll_for_student(poll: Poll, student: Student) -> dict[str, objec
 
 
 def _enrolled_course_ids(student: Student) -> set[str]:
-    attendance_course_ids = set(
-        AttendanceRecord.objects.filter(student=student).values_list('course_id', flat=True)
-    )
-    mapped_course_ids = set(
-        StudentCourse.objects.filter(student=student).values_list('course_id', flat=True)
-    )
-    return attendance_course_ids | mapped_course_ids
+    # Combine both sources in a single query using union to reduce DB round-trips.
+    attendance_qs = AttendanceRecord.objects.filter(student=student).values_list('course_id', flat=True)
+    mapping_qs = StudentCourse.objects.filter(student=student).values_list('course_id', flat=True)
+    return set(attendance_qs.union(mapping_qs))
 
 
 def _student_is_mapped_to_course(student: Student, course: Course) -> bool:

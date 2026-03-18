@@ -1,12 +1,14 @@
 import {
   BellRing,
   BookOpenText,
+  Bus,
   ChevronDown,
   ChevronUp,
   Calculator,
   CalendarDays,
   ClipboardCheck,
   FileCheck2,
+  IndianRupee,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -44,6 +46,8 @@ const navSections = [
       { to: '/dashboard/noticeboard', label: 'Noticeboard', icon: BellRing },
       { to: '/sharing', label: 'Campus Sharing', icon: Users },
       { to: '/dashboard/polls', label: 'Polls', icon: ScrollText },
+      { to: '/dashboard/bus-schedule', label: 'Bus Schedule', icon: Bus },
+      { to: '/dashboard/loan-calculator', label: 'Loan Calculator', icon: IndianRupee },
     ],
   },
   {
