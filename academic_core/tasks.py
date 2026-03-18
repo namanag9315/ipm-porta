@@ -358,11 +358,17 @@ def _attendance_mark_column_indices(headers: list[str], roll_column: int) -> lis
         if not normalized_header:
             mark_columns.append(column_index)
             continue
-        if any(hint in normalized_header for hint in ATTENDANCE_SUMMARY_HEADER_HINTS):
+        if _is_attendance_summary_header(normalized_header):
             continue
         mark_columns.append(column_index)
 
     return mark_columns or list(range(roll_column + 1, len(headers)))
+
+
+def _is_attendance_summary_header(normalized_header: str) -> bool:
+    if normalized_header in {'p', 'a', 'l'}:
+        return True
+    return any(hint in normalized_header for hint in ATTENDANCE_SUMMARY_HEADER_HINTS)
 
 
 def _infer_credits_from_total_delivered(total_delivered: int) -> int:

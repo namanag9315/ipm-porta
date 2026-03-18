@@ -32,6 +32,8 @@ services:
         sync: false
       - key: ONLY_BATCH_CODE
         sync: false
+      - key: ATTENDANCE_CLEANUP_ENABLED
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: DJANGO_SECRET_KEY
