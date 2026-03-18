@@ -391,6 +391,59 @@ def _reorder_materials_with_ai(materials: list[CourseMaterial]) -> list[int]:
     return ordered_unique
 
 
+def _normalize_gemini_model_name(model_name: str) -> str:
+    normalized = str(model_name or '').strip()
+    if not normalized:
+        return ''
+    if normalized.startswith('models/'):
+        return normalized.split('/', 1)[1].strip()
+    return normalized
+
+
+def _list_gemini_generate_content_models(genai_module) -> list[str]:
+    names: list[str] = []
+    try:
+        for model in genai_module.list_models():
+            methods = getattr(model, 'supported_generation_methods', None) or []
+            normalized_methods = {str(method).replace('_', '').lower() for method in methods}
+            if 'generatecontent' in normalized_methods:
+                name = str(getattr(model, 'name', '')).strip()
+                if name:
+                    names.append(name)
+    except Exception as exc:
+        logger.warning('Unable to list Gemini models for this API key: %s', exc)
+    return names
+
+
+def _pick_gemini_model_name(preferred_model: str, available_model_names: list[str]) -> str:
+    preferred = _normalize_gemini_model_name(preferred_model)
+    model_map: dict[str, str] = {}
+    for model_name in available_model_names:
+        short_name = _normalize_gemini_model_name(model_name)
+        if short_name and short_name not in model_map:
+            model_map[short_name] = model_name
+
+    for candidate in [
+        preferred,
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-pro',
+    ]:
+        if candidate and candidate in model_map:
+            return model_map[candidate]
+
+    flash_match = next((name for short_name, name in model_map.items() if 'flash' in short_name), '')
+    if flash_match:
+        return flash_match
+
+    if model_map:
+        return next(iter(model_map.values()))
+
+    return preferred_model or 'gemini-2.0-flash'
+
+
 def _generate_gemini_draft(prompt: str) -> str:
     api_key = (
         os.getenv('GEMINI_API_KEY', '').strip()
@@ -405,16 +458,37 @@ def _generate_gemini_draft(prompt: str) -> str:
     except Exception as exc:
         raise RuntimeError('google-generativeai is not installed.') from exc
 
-    model_name = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip() or 'gemini-1.5-flash'
+    configured_model = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash').strip() or 'gemini-2.0-flash'
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name)
-    response = model.generate_content(
-        (
-            'Write a professionally formatted, polite, and clear announcement draft for students. '
-            'Do not add markdown headings. Keep it concise but complete.\n\n'
-            f'Request:\n{prompt.strip()}'
-        )
+    available_models = _list_gemini_generate_content_models(genai)
+    model_name = _pick_gemini_model_name(configured_model, available_models)
+    prompt_text = (
+        'Write a professionally formatted, polite, and clear announcement draft for students. '
+        'Do not add markdown headings. Keep it concise but complete.\n\n'
+        f'Request:\n{prompt.strip()}'
     )
+
+    try:
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt_text)
+    except Exception as exc:
+        error_text = str(exc).lower()
+        model_not_found = 'not found' in error_text or 'not supported for generatecontent' in error_text
+        if not model_not_found:
+            raise
+
+        fallback_model = _pick_gemini_model_name('gemini-2.0-flash', available_models)
+        if _normalize_gemini_model_name(fallback_model) == _normalize_gemini_model_name(model_name):
+            raise
+
+        logger.warning(
+            'Configured Gemini model "%s" failed; retrying with "%s".',
+            model_name,
+            fallback_model,
+        )
+        model = genai.GenerativeModel(fallback_model)
+        response = model.generate_content(prompt_text)
+
     text = str(getattr(response, 'text', '') or '').strip()
     if text:
         return text

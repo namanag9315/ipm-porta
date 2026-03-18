@@ -2,6 +2,7 @@ from django.test import TestCase
 
 from academic_core.models import AttendanceRecord, Batch, StudentCourse
 from academic_core.tasks import _attendance_mark_column_indices, _count_attendance_marks, parse_attendance
+from academic_core.views import _pick_gemini_model_name
 
 
 class AttendanceParsingTests(TestCase):
@@ -71,3 +72,19 @@ class AttendanceParsingTests(TestCase):
         self.assertEqual(record.total_delivered, 3)
         self.assertEqual(record.total_attended, 1)
         self.assertEqual(record.percentage, 33.33)
+
+
+class GeminiModelSelectionTests(TestCase):
+    def test_pick_model_keeps_available_preferred_model(self):
+        picked = _pick_gemini_model_name(
+            'gemini-2.0-flash',
+            ['models/gemini-2.0-flash', 'models/gemini-2.0-pro'],
+        )
+        self.assertEqual(picked, 'models/gemini-2.0-flash')
+
+    def test_pick_model_falls_back_to_available_flash_model(self):
+        picked = _pick_gemini_model_name(
+            'gemini-1.5-flash',
+            ['models/gemini-2.0-pro', 'models/gemini-2.0-flash'],
+        )
+        self.assertEqual(picked, 'models/gemini-2.0-flash')
