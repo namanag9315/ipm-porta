@@ -34,6 +34,21 @@ ROLL_NO_PATTERN = re.compile(r'^roll\s*no(?:\.|)?$', re.IGNORECASE)
 ROLL_NO_NORMALIZED_PATTERN = re.compile(r'^roll (?:no|number)$', re.IGNORECASE)
 SKIP_ATTENDANCE_SHEETS = {'time table', 'consolidated', 'mess', 'bld menu'}
 ATTENDANCE_MARKERS = {'P', 'A', 'L'}
+ATTENDANCE_SUMMARY_HEADER_HINTS = (
+    'total',
+    'attend',
+    'present',
+    'absent',
+    'late',
+    'percent',
+    'percentage',
+    'remark',
+    'average',
+    'summary',
+    'delivered',
+    'credit',
+    'grade',
+)
 SHEET_PARAM_CANDIDATES = ('id', 'spreadsheetId', 'sheetId', 'sheet_id')
 LOCAL_TIMEZONE = ZoneInfo('Asia/Kolkata')
 
@@ -323,14 +338,31 @@ def _count_attendance_marks(values: list[Any]) -> tuple[int, int, int]:
         marker = _safe_text(value).strip().upper()
         if not marker or marker in {'-', 'NA', 'N/A', 'NONE', 'NAN'}:
             continue
-        if marker in {'P', 'PRESENT', 'PR', '1', 'Y', 'YES', 'OD', 'ML', 'S', 'E'}:
+        if marker in {'P', 'PRESENT', 'PR'}:
             p_count += 1
-        elif marker in {'A', 'ABSENT', '0', 'N', 'NO'}:
+        elif marker in {'A', 'ABSENT'}:
             a_count += 1
         elif marker in {'L', 'LATE'}:
             l_count += 1
 
     return p_count, a_count, l_count
+
+
+def _attendance_mark_column_indices(headers: list[str], roll_column: int) -> list[int]:
+    if roll_column < 0:
+        return []
+
+    mark_columns: list[int] = []
+    for column_index in range(roll_column + 1, len(headers)):
+        normalized_header = _normalize_header(headers[column_index])
+        if not normalized_header:
+            mark_columns.append(column_index)
+            continue
+        if any(hint in normalized_header for hint in ATTENDANCE_SUMMARY_HEADER_HINTS):
+            continue
+        mark_columns.append(column_index)
+
+    return mark_columns or list(range(roll_column + 1, len(headers)))
 
 
 def _infer_credits_from_total_delivered(total_delivered: int) -> int:
@@ -348,6 +380,7 @@ def _has_attendance_markers(
     sheet_data: list[list[Any]],
     header_index: int,
     roll_column: int,
+    mark_columns: list[int],
 ) -> bool:
     for row in sheet_data[header_index + 1 : header_index + 80]:
         if not isinstance(row, (list, tuple)):
@@ -355,7 +388,7 @@ def _has_attendance_markers(
         roll_number = _safe_text(_cell_value(row, roll_column))
         if not roll_number or _is_non_data_row(roll_number):
             continue
-        attendance_slice = list(row[roll_column + 1 :]) if len(row) > roll_column + 1 else []
+        attendance_slice = [_cell_value(row, column_index) for column_index in mark_columns]
         present_count, absent_count, late_count = _count_attendance_marks(attendance_slice)
         if present_count + absent_count + late_count > 0:
             return True
@@ -693,7 +726,8 @@ def parse_attendance(
         name_column = _find_column_index(headers, {'student name', 'name'})
         if roll_column is None:
             continue
-        if not _has_attendance_markers(sheet_data, header_index, roll_column):
+        mark_columns = _attendance_mark_column_indices(headers, roll_column)
+        if not _has_attendance_markers(sheet_data, header_index, roll_column, mark_columns):
             continue
         course_code = _infer_course_code_from_sheet_name(sheet_name)
         if not course_code:
@@ -737,7 +771,7 @@ def parse_attendance(
 
                 student_name = _safe_text(_cell_value(row, name_column)) or roll_number
 
-                attendance_slice = list(row[roll_column + 1 :]) if len(row) > roll_column + 1 else []
+                attendance_slice = [_cell_value(row, column_index) for column_index in mark_columns]
                 present_count, absent_count, late_count = _count_attendance_marks(attendance_slice)
                 total_delivered = present_count + absent_count + late_count
                 total_attended = present_count
@@ -751,16 +785,6 @@ def parse_attendance(
                         for value in attendance_slice
                     )
                     if not non_empty_marks:
-                        # Still create the StudentCourse mapping even with 0 marks,
-                        # so the student's timetable is properly filtered.
-                        student = Student.objects.filter(roll_number__iexact=roll_number).first()
-                        if student is not None:
-                            student_batch_zero = _resolve_student_batch(roll_number, fallback_batch=batch)
-                            StudentCourse.objects.get_or_create(
-                                student=student,
-                                course=course,
-                                defaults={'batch': student_batch_zero or batch},
-                            )
                         continue
 
                 student = Student.objects.filter(roll_number__iexact=roll_number).first()
