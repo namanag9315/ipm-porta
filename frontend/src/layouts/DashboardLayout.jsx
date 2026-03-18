@@ -11,16 +11,18 @@ import {
   IndianRupee,
   LayoutDashboard,
   LogOut,
+  Menu,
   Megaphone,
   ScrollText,
   ShieldCheck,
   UserRoundCog,
   Users,
   UtensilsCrossed,
+  X,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { useAuth } from '../hooks/useAuth'
 import { cn } from '../lib/cn'
@@ -69,12 +71,65 @@ export default function DashboardLayout() {
     campus: true,
     admin_tools: true,
   })
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+
+  useEffect(() => {
+    setMobileMenuOpen(false)
+  }, [location.pathname])
 
   function toggleSection(key) {
     setOpenSections((current) => ({
       ...current,
       [key]: !current[key],
     }))
+  }
+
+  function renderNavSection(section, onItemClick) {
+    const isOpen = Boolean(openSections[section.key])
+    return (
+      <div key={section.key}>
+        <button
+          type="button"
+          onClick={() => toggleSection(section.key)}
+          className="mb-2 flex w-full items-center justify-between rounded-xl px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 transition hover:bg-white/10"
+        >
+          <span>{section.title}</span>
+          {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+        {isOpen ? (
+          <div className="space-y-2">
+            {section.items.map(({ to, label, icon: Icon, end }) => (
+              <NavLink key={to} to={to} end={end} onClick={onItemClick}>
+                {({ isActive }) => (
+                  <div
+                    className={cn(
+                      'group relative flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200',
+                      isActive
+                        ? 'bg-white/12 text-white'
+                        : 'text-slate-300 hover:bg-white/10 hover:text-white',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'absolute bottom-2 left-0 top-2 w-1 rounded-r-full transition-colors duration-200',
+                        isActive ? 'bg-iim-gold' : 'bg-transparent',
+                      )}
+                    />
+                    <Icon
+                      className={cn(
+                        'h-4 w-4 transition-colors',
+                        isActive ? 'text-white' : 'text-slate-400 group-hover:text-white',
+                      )}
+                    />
+                    <span>{label}</span>
+                  </div>
+                )}
+              </NavLink>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    )
   }
 
   return (
@@ -91,55 +146,7 @@ export default function DashboardLayout() {
               <h2 className="mt-2 heading-tight text-2xl font-bold text-white">IPM Portal</h2>
             </div>
 
-            <nav className="space-y-5">
-              {navSections.map((section) => {
-                const isOpen = Boolean(openSections[section.key])
-                return (
-                  <div key={section.key}>
-                    <button
-                      type="button"
-                      onClick={() => toggleSection(section.key)}
-                      className="mb-2 flex w-full items-center justify-between rounded-xl px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 transition hover:bg-white/10"
-                    >
-                      <span>{section.title}</span>
-                      {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                    </button>
-                    {isOpen ? (
-                      <div className="space-y-2">
-                        {section.items.map(({ to, label, icon: Icon, end }) => (
-                          <NavLink key={to} to={to} end={end}>
-                            {({ isActive }) => (
-                              <div
-                                className={cn(
-                                  'group relative flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200',
-                                  isActive
-                                    ? 'bg-white/12 text-white'
-                                    : 'text-slate-300 hover:bg-white/10 hover:text-white',
-                                )}
-                              >
-                                <span
-                                  className={cn(
-                                    'absolute bottom-2 left-0 top-2 w-1 rounded-r-full transition-colors duration-200',
-                                    isActive ? 'bg-iim-gold' : 'bg-transparent',
-                                  )}
-                                />
-                                <Icon
-                                  className={cn(
-                                    'h-4 w-4 transition-colors',
-                                    isActive ? 'text-white' : 'text-slate-400 group-hover:text-white',
-                                  )}
-                                />
-                                <span>{label}</span>
-                              </div>
-                            )}
-                          </NavLink>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              })}
-            </nav>
+            <nav className="space-y-5">{navSections.map((section) => renderNavSection(section))}</nav>
           </div>
 
           <button
@@ -152,16 +159,83 @@ export default function DashboardLayout() {
           </button>
         </aside>
 
+        <AnimatePresence>
+          {mobileMenuOpen ? (
+            <>
+              <motion.button
+                type="button"
+                aria-label="Close navigation"
+                onClick={() => setMobileMenuOpen(false)}
+                className="fixed inset-0 z-30 bg-slate-950/45 lg:hidden"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              />
+              <motion.aside
+                className="custom-scrollbar fixed inset-y-0 left-0 z-40 flex w-[86vw] max-w-xs flex-col justify-between overflow-y-auto rounded-r-3xl bg-iim-blue p-6 shadow-soft lg:hidden"
+                initial={{ x: '-100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '-100%' }}
+                transition={{ type: 'spring', stiffness: 260, damping: 30 }}
+              >
+                <div>
+                  <div className="mb-6 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-[0.25em] text-slate-300">
+                        IIM Indore
+                      </p>
+                      <h2 className="mt-2 heading-tight text-2xl font-bold text-white">IPM Portal</h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMobileMenuOpen(false)}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/20 text-slate-200 transition hover:bg-white/10"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <nav className="space-y-5">
+                    {navSections.map((section) =>
+                      renderNavSection(section, () => {
+                        setMobileMenuOpen(false)
+                      }),
+                    )}
+                  </nav>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="mt-6 inline-flex items-center gap-2 rounded-xl border border-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:border-white/50 hover:bg-white/10"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Log out
+                </button>
+              </motion.aside>
+            </>
+          ) : null}
+        </AnimatePresence>
+
         <div className="flex min-h-[calc(100vh-3rem)] flex-1 flex-col">
           <header className="sticky top-0 z-20 mb-6 rounded-2xl border border-white/60 bg-white/60 px-5 py-4 backdrop-blur-xl">
             <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                  Good to see you
-                </p>
-                <h1 className="heading-tight mt-1 text-xl font-semibold text-slate-900">
-                  {user?.name || user?.rollNumber || 'IPM Student'}
-                </h1>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setMobileMenuOpen(true)}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50 lg:hidden"
+                  aria-label="Open navigation"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                    Good to see you
+                  </p>
+                  <h1 className="heading-tight mt-1 text-xl font-semibold text-slate-900">
+                    {user?.name || user?.rollNumber || 'IPM Student'}
+                  </h1>
+                </div>
               </div>
 
               <div className="inline-flex items-center gap-3 rounded-full border border-white/70 bg-white/70 px-3 py-2 shadow-sm">
