@@ -5,6 +5,8 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '../hooks/useAuth'
 import api from '../lib/api'
 
+const UPI_ID_REGEX = /^[a-z0-9.\-_]{2,}@[a-z0-9.\-_]{2,}$/i
+
 export default function ProfileView() {
   const { user, updateUserProfile } = useAuth()
 
@@ -13,6 +15,7 @@ export default function ProfileView() {
     section: '',
     name: '',
     email: '',
+    upi_id: '',
     date_of_birth: '',
   })
 
@@ -51,6 +54,7 @@ export default function ProfileView() {
           section: data.section || '',
           name: data.name || '',
           email: data.email || '',
+          upi_id: data.upi_id || '',
           date_of_birth: data.date_of_birth || '',
         })
       } catch (fetchError) {
@@ -88,10 +92,18 @@ export default function ProfileView() {
     setError('')
     setProfileMessage('')
 
+    const normalizedUpiId = String(profile.upi_id || '').trim().toLowerCase()
+    if (normalizedUpiId && !UPI_ID_REGEX.test(normalizedUpiId)) {
+      setError('Please enter a valid UPI ID (example: yourname@okaxis).')
+      setSavingProfile(false)
+      return
+    }
+
     try {
       const response = await api.patch(`/api/v1/profile/${user.rollNumber}/`, {
         name: profile.name,
         email: profile.email,
+        upi_id: normalizedUpiId || '',
         date_of_birth: profile.date_of_birth || null,
       })
       const data = response.data || {}
@@ -100,6 +112,7 @@ export default function ProfileView() {
         ...current,
         name: data.name || current.name,
         email: data.email || current.email,
+        upi_id: data.upi_id || '',
         date_of_birth: data.date_of_birth || '',
         section: data.section || current.section,
       }))
@@ -107,6 +120,7 @@ export default function ProfileView() {
       updateUserProfile({
         name: data.name || profile.name,
         email: data.email || profile.email,
+        upiId: data.upi_id || normalizedUpiId || '',
         section: data.section || profile.section,
         dateOfBirth: data.date_of_birth || null,
       })
@@ -218,6 +232,19 @@ export default function ProfileView() {
                   required
                   className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-iim-blue focus:outline-none focus:ring-2 focus:ring-iim-blue/20"
                 />
+              </label>
+
+              <label className="space-y-1 block">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">UPI ID</span>
+                <input
+                  value={profile.upi_id || ''}
+                  onChange={(event) => handleProfileChange('upi_id', event.target.value)}
+                  placeholder="yourname@upi"
+                  className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-iim-blue focus:outline-none focus:ring-2 focus:ring-iim-blue/20"
+                />
+                <p className="text-[11px] text-slate-500">
+                  This is used to generate QR for Split &amp; Settle payments.
+                </p>
               </label>
 
               <label className="space-y-1 block">

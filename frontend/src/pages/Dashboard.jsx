@@ -17,7 +17,6 @@ import { useAuth } from '../hooks/useAuth'
 import api from '../lib/api'
 import { cn } from '../lib/cn'
 import { combineDateAndTime, formatDateLabel, formatTimeLabel, toIsoDate } from '../lib/date'
-import SettleUpCard from '../components/finance/SettleUpCard'
 
 const MAX_DASHBOARD_CLASSES = 3
 const DASHBOARD_PRIMARY_TIMEOUT_MS = 15000
@@ -502,8 +501,6 @@ export default function Dashboard() {
           {error}
         </div>
       ) : null}
-
-      <SettleUpCard />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-12">
         <motion.section

@@ -91,7 +91,7 @@ class StudentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
-        fields = ['roll_number', 'batch_code', 'name', 'section', 'email', 'date_of_birth', 'is_ipmo']
+        fields = ['roll_number', 'batch_code', 'name', 'section', 'email', 'upi_id', 'date_of_birth', 'is_ipmo']
 
 
 class AttendanceSerializer(serializers.ModelSerializer):

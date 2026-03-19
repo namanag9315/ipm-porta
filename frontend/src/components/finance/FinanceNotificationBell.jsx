@@ -33,7 +33,7 @@ export default function FinanceNotificationBell() {
 
   return (
     <Link
-      to="/dashboard#settle-up"
+      to="/dashboard/split-settle"
       aria-label="Pending dues notifications"
       className="relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50"
     >

@@ -73,6 +73,7 @@ logger = logging.getLogger(__name__)
 
 LOCAL_TIMEZONE = ZoneInfo('Asia/Kolkata')
 DEFAULT_BATCH_CODE = str(max(2000, timezone.now().astimezone(LOCAL_TIMEZONE).year - 3))
+UPI_ID_PATTERN = re.compile(r'^[a-z0-9.\-_]{2,}@[a-z0-9.\-_]{2,}$')
 
 
 def _parse_optional_datetime(value: object) -> datetime.datetime | None:
@@ -95,6 +96,15 @@ def _parse_bool(value: object, default: bool = False) -> bool:
     if text in {'0', 'false', 'no', 'off'}:
         return False
     return default
+
+
+def _normalize_upi_id(value: object) -> tuple[str | None, str | None]:
+    text = str(value or '').strip().lower()
+    if not text:
+        return None, None
+    if not UPI_ID_PATTERN.fullmatch(text):
+        return None, 'Invalid UPI ID format.'
+    return text, None
 
 
 def _parse_sort_order(value: object, default: int = 0) -> int:
@@ -897,6 +907,11 @@ def finance_split(request) -> Response:
             {'detail': 'description is required.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    if len(description) < 3:
+        return Response(
+            {'detail': 'description must be at least 3 characters.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     if raw_amount in (None, ''):
         return Response(
             {'detail': 'amount is required.'},
@@ -913,6 +928,23 @@ def finance_split(request) -> Response:
         return Response(
             {'detail': 'Debtor student not found.'},
             status=status.HTTP_404_NOT_FOUND,
+        )
+    if creditor.batch_id and debtor.batch_id and creditor.batch_id != debtor.batch_id:
+        return Response(
+            {'detail': 'You can only split expenses with students in your batch.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    normalized_upi_id, upi_error = _normalize_upi_id(creditor.upi_id)
+    if upi_error:
+        return Response(
+            {'detail': 'Please update a valid UPI ID in your profile before creating split requests.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not normalized_upi_id:
+        return Response(
+            {'detail': 'Please add your UPI ID in profile before creating split requests.'},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     try:
@@ -937,6 +969,33 @@ def finance_split(request) -> Response:
     )
     serializer = PeerTransactionSerializer(transaction_obj)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+def finance_students(request) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    query = str(request.query_params.get('q', '')).strip()
+    students = Student.objects.exclude(roll_number=student.roll_number)
+    if student.batch_id:
+        students = students.filter(batch_id=student.batch_id)
+    if query:
+        students = students.filter(
+            Q(roll_number__icontains=query) | Q(name__icontains=query)
+        )
+
+    students = students.order_by('roll_number')[:80]
+    payload = [
+        {
+            'roll_number': item.roll_number,
+            'name': item.name,
+            'section': item.section,
+        }
+        for item in students
+    ]
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
@@ -1377,6 +1436,7 @@ def get_or_update_student_profile(request, roll_number: str) -> Response:
 
     name = request.data.get('name', student.name)
     email = request.data.get('email', student.email)
+    upi_id_value = request.data.get('upi_id', student.upi_id)
     date_of_birth_value = request.data.get('date_of_birth', student.date_of_birth)
 
     update_fields: list[str] = []
@@ -1430,6 +1490,17 @@ def get_or_update_student_profile(request, roll_number: str) -> Response:
         if student.date_of_birth != parsed_dob:
             student.date_of_birth = parsed_dob
             update_fields.append('date_of_birth')
+
+    if 'upi_id' in request.data:
+        normalized_upi_id, upi_error = _normalize_upi_id(upi_id_value)
+        if upi_error:
+            return Response(
+                {'detail': upi_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if student.upi_id != normalized_upi_id:
+            student.upi_id = normalized_upi_id
+            update_fields.append('upi_id')
 
     if update_fields:
         student.save(update_fields=update_fields)
