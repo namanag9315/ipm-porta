@@ -135,10 +135,11 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-5" autoComplete="on">
             <FloatingLabelInput
               id="roll-number"
               label="Roll Number"
+              name="username"
               autoComplete="username"
               value={rollNumber}
               onChange={(event) => setRollNumber(event.target.value)}
@@ -149,6 +150,7 @@ export default function LoginPage() {
               id="password"
               label="Password"
               type="password"
+              name="password"
               autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}

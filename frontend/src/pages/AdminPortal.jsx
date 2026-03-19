@@ -666,7 +666,11 @@ export default function AdminPortal() {
               </p>
             </div>
 
-            <form onSubmit={handleLogin} className="rounded-3xl border border-slate-200 bg-white p-7 shadow-soft">
+            <form
+              onSubmit={handleLogin}
+              className="rounded-3xl border border-slate-200 bg-white p-7 shadow-soft"
+              autoComplete="on"
+            >
               <h3 className="heading-tight text-xl font-semibold text-slate-900">Admin Sign In</h3>
               <p className="mt-1 text-sm text-slate-500">Use your Django staff credentials.</p>
 
@@ -675,6 +679,7 @@ export default function AdminPortal() {
                   Username
                   <input
                     className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                    name="username"
                     value={username}
                     onChange={(event) => setUsername(event.target.value)}
                     autoComplete="username"
@@ -685,6 +690,7 @@ export default function AdminPortal() {
                   Password
                   <input
                     className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                    name="password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     type="password"
