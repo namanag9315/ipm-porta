@@ -13,7 +13,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
-from django.db.models import Max, Q
+from django.db.models import Max, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
@@ -618,6 +618,55 @@ def _serialize_poll_for_student(poll: Poll, student: Student) -> dict[str, objec
         'student_vote_option_id': student_vote.option_id if student_vote else None,
         'total_votes': total_votes if student_vote else None,
         'options': options_payload,
+    }
+
+
+def _serialize_poll_for_admin(poll: Poll) -> dict[str, object]:
+    votes = list(poll.votes.all())
+    vote_counts: dict[int, int] = {}
+    voters_by_option: dict[int, list[dict[str, object]]] = {}
+
+    for vote in votes:
+        vote_counts[vote.option_id] = vote_counts.get(vote.option_id, 0) + 1
+        voters_by_option.setdefault(vote.option_id, []).append(
+            {
+                'roll_number': vote.student_id,
+                'name': vote.student.name,
+                'section': vote.student.section,
+                'voted_at': vote.created_at,
+            }
+        )
+
+    options_payload: list[dict[str, object]] = []
+    for option in sorted(poll.options.all(), key=lambda item: item.id):
+        voters = voters_by_option.get(option.id, [])
+        options_payload.append(
+            {
+                'id': option.id,
+                'text': option.text,
+                'vote_count': vote_counts.get(option.id, 0),
+                'voters': voters,
+            }
+        )
+
+    return {
+        'id': poll.id,
+        'title': poll.title,
+        'description': poll.description,
+        'target_type': poll.target_type,
+        'target_course': (
+            {
+                'code': poll.target_course.code,
+                'name': poll.target_course.name,
+            }
+            if poll.target_course
+            else None
+        ),
+        'created_by': poll.created_by,
+        'created_at': poll.created_at,
+        'expires_at': poll.expires_at,
+        'options': options_payload,
+        'total_votes': len(votes),
     }
 
 
@@ -1830,12 +1879,18 @@ def admin_polls(request) -> Response:
     if request.method == 'GET':
         polls = (
             Poll.objects.select_related('target_course')
-            .prefetch_related('options')
+            .prefetch_related(
+                'options',
+                Prefetch(
+                    'votes',
+                    queryset=PollVote.objects.select_related('student').order_by('created_at', 'id'),
+                ),
+            )
             .filter(batch=batch)
             .order_by('-created_at')
         )
-        serializer = PollSerializer(polls, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        payload = [_serialize_poll_for_admin(poll) for poll in polls]
+        return Response(payload, status=status.HTTP_200_OK)
 
     title = str(request.data.get('title', '')).strip()
     if not title:
@@ -1912,8 +1967,14 @@ def admin_polls(request) -> Response:
             [PollOption(poll=poll, text=option[:220]) for option in cleaned_options]
         )
 
-    serialized = PollSerializer(Poll.objects.prefetch_related('options').get(pk=poll.id))
-    return Response(serialized.data, status=status.HTTP_201_CREATED)
+    created_poll = Poll.objects.select_related('target_course').prefetch_related(
+        'options',
+        Prefetch(
+            'votes',
+            queryset=PollVote.objects.select_related('student').order_by('created_at', 'id'),
+        ),
+    ).get(pk=poll.id)
+    return Response(_serialize_poll_for_admin(created_poll), status=status.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -1959,8 +2020,14 @@ def admin_poll_detail(request, poll_id: int) -> Response:
     if update_fields:
         poll.save(update_fields=list(set(update_fields)))
 
-    serialized = PollSerializer(Poll.objects.prefetch_related('options').get(pk=poll.id))
-    return Response(serialized.data, status=status.HTTP_200_OK)
+    refreshed_poll = Poll.objects.select_related('target_course').prefetch_related(
+        'options',
+        Prefetch(
+            'votes',
+            queryset=PollVote.objects.select_related('student').order_by('created_at', 'id'),
+        ),
+    ).get(pk=poll.id)
+    return Response(_serialize_poll_for_admin(refreshed_poll), status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])

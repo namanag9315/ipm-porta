@@ -1437,8 +1437,35 @@ export default function AdminPortal() {
                           <p className="mt-1 text-sm text-slate-700">{poll.description}</p>
                         ) : null}
                         <p className="mt-2 text-xs text-slate-500">
-                          {poll.options?.length || 0} options • Expires {toLocalDateTimeLabel(poll.expires_at)}
+                          {poll.total_votes ?? 0} votes • {poll.options?.length || 0} options • Expires{' '}
+                          {toLocalDateTimeLabel(poll.expires_at)}
                         </p>
+                        <div className="mt-3 space-y-2">
+                          {(poll.options || []).map((option) => (
+                            <div key={option.id} className="rounded-xl border border-slate-200 bg-white p-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-xs font-semibold text-slate-800">{option.text}</p>
+                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                  {option.vote_count ?? 0} vote{(option.vote_count ?? 0) === 1 ? '' : 's'}
+                                </span>
+                              </div>
+                              {(option.voters || []).length > 0 ? (
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  {option.voters.map((voter, index) => (
+                                    <span
+                                      key={`${option.id}-${voter.roll_number || 'student'}-${index}`}
+                                      className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-800"
+                                    >
+                                      {voter.name || voter.roll_number} ({voter.roll_number})
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="mt-2 text-[11px] text-slate-500">No votes yet.</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                         <button
                           type="button"
                           onClick={() => deletePoll(poll.id)}

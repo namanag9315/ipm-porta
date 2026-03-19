@@ -187,6 +187,37 @@ function normalizeCourseDisplayName(value) {
   return cleaned || 'Course'
 }
 
+function buildDashboardPollAnnouncement(polls) {
+  const activePolls = Array.isArray(polls) ? polls : []
+  if (activePolls.length === 0) {
+    return null
+  }
+
+  const pendingPolls = activePolls.filter((poll) => !poll?.has_voted)
+  const focusPolls = pendingPolls.length > 0 ? pendingPolls : activePolls
+  const newestPoll = [...focusPolls].sort(
+    (left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime(),
+  )[0]
+  const highlightedTitles = focusPolls
+    .map((poll) => String(poll?.title || '').trim())
+    .filter(Boolean)
+    .slice(0, 2)
+  const extraCount = Math.max(0, focusPolls.length - highlightedTitles.length)
+  const title = pendingPolls.length > 0 ? `New poll${pendingPolls.length > 1 ? 's' : ''} available` : 'Polls updated'
+  const summaryText = highlightedTitles.length > 0 ? highlightedTitles.join(' • ') : 'Open Polls to check updates'
+  const suffixText = extraCount > 0 ? ` • +${extraCount} more` : ''
+  const actionText = pendingPolls.length > 0 ? 'Vote now from the Polls section.' : 'Check the latest results in Polls.'
+
+  return {
+    id: `poll-alert-${newestPoll?.id || 'active'}`,
+    title,
+    content: `${summaryText}${suffixText}. ${actionText}`,
+    posted_by: 'IPM Portal',
+    created_at: newestPoll?.created_at || new Date().toISOString(),
+    _is_poll_alert: true,
+  }
+}
+
 export default function Dashboard() {
   const { user } = useAuth()
   const [attendance, setAttendance] = useState([])
@@ -260,6 +291,12 @@ export default function Dashboard() {
             signal: controller.signal,
             timeout: DASHBOARD_SECONDARY_TIMEOUT_MS,
           }),
+          user?.rollNumber
+            ? api.get(`/api/v1/polls/?roll_number=${user.rollNumber}`, {
+                signal: controller.signal,
+                timeout: DASHBOARD_SECONDARY_TIMEOUT_MS,
+              })
+            : Promise.resolve({ data: [] }),
           ...menuDates.map((dateIso) =>
             api.get(`/api/v1/mess-menu/?date=${dateIso}&template_fallback=1`, {
               signal: controller.signal,
@@ -269,13 +306,17 @@ export default function Dashboard() {
         ])
 
         const extrasRes = secondaryResults[0]?.status === 'fulfilled' ? secondaryResults[0].value : null
-        const menuResponses = secondaryResults.slice(1)
+        const pollsRes = secondaryResults[1]?.status === 'fulfilled' ? secondaryResults[1].value : null
+        const menuResponses = secondaryResults.slice(2)
 
         if (extrasRes) {
+          const rawAnnouncements = Array.isArray(extrasRes.data?.recent_announcements)
+            ? extrasRes.data.recent_announcements
+            : []
+          const activePolls = Array.isArray(pollsRes?.data) ? pollsRes.data : []
+          const pollAnnouncement = buildDashboardPollAnnouncement(activePolls)
           setBirthdaysToday(Array.isArray(extrasRes.data?.birthdays_today) ? extrasRes.data.birthdays_today : [])
-          setRecentAnnouncements(
-            Array.isArray(extrasRes.data?.recent_announcements) ? extrasRes.data.recent_announcements : [],
-          )
+          setRecentAnnouncements(pollAnnouncement ? [pollAnnouncement, ...rawAnnouncements].slice(0, 4) : rawAnnouncements)
           setUpcomingAssignments(
             Array.isArray(extrasRes.data?.upcoming_assignments) ? extrasRes.data.upcoming_assignments : [],
           )
@@ -544,13 +585,25 @@ export default function Dashboard() {
               {recentAnnouncements.map((announcement) => (
                 <article
                   key={announcement.id}
-                  className="rounded-2xl border border-slate-200/70 bg-slate-50/70 p-4"
+                  className={cn(
+                    'rounded-2xl border border-slate-200/70 bg-slate-50/70 p-4',
+                    announcement?._is_poll_alert && 'border-amber-200 bg-amber-50/70',
+                  )}
                 >
                   <p className="text-sm font-semibold text-slate-900">{announcement.title}</p>
                   <p className="mt-1 text-xs text-slate-600">{announcement.content}</p>
                   <p className="mt-2 text-[11px] font-medium text-slate-500">
                     {announcement.posted_by} • {formatDateLabel(announcement.created_at)}
                   </p>
+                  {announcement?._is_poll_alert ? (
+                    <Link
+                      to="/dashboard/polls"
+                      className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-iim-blue hover:underline"
+                    >
+                      Open Polls
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
+                  ) : null}
                 </article>
               ))}
             </div>
