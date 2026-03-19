@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 
 import adminApi from '../lib/adminApi'
 import {
@@ -68,6 +68,7 @@ function toIsoDateTime(dateValue, timeValue) {
 }
 
 export default function AdminPortal() {
+  const location = useLocation()
   const [accessToken, setAccessToken] = useState(() => getAdminAccessToken())
   const [adminUser, setAdminUser] = useState(() => getStoredAdminUser())
 
@@ -132,6 +133,14 @@ export default function AdminPortal() {
   })
 
   const isAuthenticated = Boolean(accessToken)
+
+  useEffect(() => {
+    const routeAuthError = location.state?.authError
+    if (routeAuthError) {
+      setAuthError(String(routeAuthError))
+      window.history.replaceState({}, document.title)
+    }
+  }, [location.state])
 
   const selectedCourseDetails = useMemo(() => {
     return courses.find((course) => course.code === selectedCourse) || null

@@ -7,8 +7,24 @@ export default function IPMOProtectedRoute({ children }) {
   const adminUser = getStoredAdminUser()
   const isIPMO = String(adminUser?.role || '').toUpperCase() === 'IPMO'
 
-  if (!token || !isIPMO) {
-    return <Navigate to="/dashboard" replace />
+  if (!token) {
+    return (
+      <Navigate
+        to="/admin-portal"
+        replace
+        state={{ authError: 'Admin login required for IPMO portal.' }}
+      />
+    )
+  }
+
+  if (!isIPMO) {
+    return (
+      <Navigate
+        to="/admin-portal"
+        replace
+        state={{ authError: 'IPMO account required. Sign in with superuser credentials.' }}
+      />
+    )
   }
 
   return children
