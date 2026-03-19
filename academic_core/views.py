@@ -1381,7 +1381,11 @@ def admin_students(request) -> Response:
         return batch_error
 
     if request.method == 'GET':
-        students = Student.objects.filter(batch=batch).order_by('roll_number')
+        students = (
+            Student.objects.select_related('batch')
+            .filter(batch=batch)
+            .order_by('roll_number')
+        )
         serializer = StudentSerializer(students, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
