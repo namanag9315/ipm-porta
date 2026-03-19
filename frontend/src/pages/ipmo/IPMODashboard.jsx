@@ -36,6 +36,50 @@ const emptyCourse = {
   credits: 0,
   drive_link: '',
 }
+const IPMO_API_TIMEOUT_MS = 90000
+const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function extractApiErrorMessage(error, fallbackMessage) {
+  const detail = error?.response?.data?.detail
+  if (detail) {
+    return String(detail)
+  }
+  const status = error?.response?.status
+  if (status) {
+    return `Request failed with status ${status}.`
+  }
+  return fallbackMessage
+}
+
+async function requestWithRetry(requestFactory, options = {}) {
+  const maxAttempts = options.attempts || 3
+  const initialDelayMs = options.initialDelayMs || 1200
+  let attempt = 0
+  let lastError = null
+
+  while (attempt < maxAttempts) {
+    try {
+      return await requestFactory()
+    } catch (error) {
+      lastError = error
+      attempt += 1
+      const status = error?.response?.status
+      const code = String(error?.code || '')
+      const networkLikeError = !error?.response || code === 'ECONNABORTED' || code === 'ERR_NETWORK'
+      const retryable = networkLikeError || RETRYABLE_HTTP_STATUSES.has(status)
+      if (!retryable || attempt >= maxAttempts) {
+        throw error
+      }
+      await sleep(initialDelayMs * attempt)
+    }
+  }
+
+  throw lastError
+}
 
 export default function IPMODashboard() {
   const adminUser = getStoredAdminUser()
@@ -91,9 +135,14 @@ export default function IPMODashboard() {
     setLoading(true)
     setError('')
     try {
-      const settingsRes = await adminApi.get('/api/v1/admin/settings/', {
-        params: batchCode ? { batch_code: batchCode } : undefined,
-      })
+      const settingsRes = await requestWithRetry(
+        () =>
+          adminApi.get('/api/v1/admin/settings/', {
+            params: batchCode ? { batch_code: batchCode } : undefined,
+            timeout: IPMO_API_TIMEOUT_MS,
+          }),
+        { attempts: 4, initialDelayMs: 1500 },
+      )
       const resolvedBatch = settingsRes.data?.selected_batch_code || batchCode || ''
       const batchesPayload = Array.isArray(settingsRes.data?.batches) ? settingsRes.data.batches : []
       setBatches(batchesPayload)
@@ -101,14 +150,6 @@ export default function IPMODashboard() {
         setSelectedBatch(resolvedBatch)
       }
 
-      const [studentsRes, coursesRes] = await Promise.all([
-        adminApi.get('/api/v1/admin/students/', {
-          params: resolvedBatch ? { batch_code: resolvedBatch } : undefined,
-        }),
-        adminApi.get('/api/v1/admin/courses/', {
-          params: resolvedBatch ? { batch_code: resolvedBatch } : undefined,
-        }),
-      ])
       setSettingsForm({
         current_term_name: settingsRes.data?.current_term_name || '',
         timetable_sheet_url: settingsRes.data?.timetable_sheet_url || '',
@@ -116,10 +157,46 @@ export default function IPMODashboard() {
         mess_menu_sheet_url: settingsRes.data?.mess_menu_sheet_url || '',
         birthday_sheet_url: settingsRes.data?.birthday_sheet_url || '',
       })
-      setStudents(Array.isArray(studentsRes.data) ? studentsRes.data : [])
-      setCourses(Array.isArray(coursesRes.data) ? coursesRes.data : [])
+
+      const [studentsRes, coursesRes] = await Promise.allSettled([
+        requestWithRetry(
+          () =>
+            adminApi.get('/api/v1/admin/students/', {
+              params: resolvedBatch ? { batch_code: resolvedBatch } : undefined,
+              timeout: IPMO_API_TIMEOUT_MS,
+            }),
+          { attempts: 3, initialDelayMs: 1200 },
+        ),
+        requestWithRetry(
+          () =>
+            adminApi.get('/api/v1/admin/courses/', {
+              params: resolvedBatch ? { batch_code: resolvedBatch } : undefined,
+              timeout: IPMO_API_TIMEOUT_MS,
+            }),
+          { attempts: 3, initialDelayMs: 1200 },
+        ),
+      ])
+
+      const loadErrors = []
+      if (studentsRes.status === 'fulfilled') {
+        setStudents(Array.isArray(studentsRes.value.data) ? studentsRes.value.data : [])
+      } else {
+        setStudents([])
+        loadErrors.push(`students: ${extractApiErrorMessage(studentsRes.reason, 'unavailable')}`)
+      }
+
+      if (coursesRes.status === 'fulfilled') {
+        setCourses(Array.isArray(coursesRes.value.data) ? coursesRes.value.data : [])
+      } else {
+        setCourses([])
+        loadErrors.push(`courses: ${extractApiErrorMessage(coursesRes.reason, 'unavailable')}`)
+      }
+
+      if (loadErrors.length > 0) {
+        setError(`IPMO config loaded, but some data failed (${loadErrors.join(' | ')}). Retry in 30s.`)
+      }
     } catch (bootstrapError) {
-      setError(bootstrapError?.response?.data?.detail || 'Unable to load IPMO dashboard data.')
+      setError(extractApiErrorMessage(bootstrapError, 'Unable to load IPMO dashboard data.'))
     } finally {
       setLoading(false)
     }
