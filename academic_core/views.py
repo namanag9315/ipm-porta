@@ -13,7 +13,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max, Q
+from django.db.models import Max, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
@@ -576,15 +576,17 @@ def _poll_visible_for_student(poll: Poll, student: Student, enrolled_course_ids:
 
 
 def _serialize_poll_for_student(poll: Poll, student: Student) -> dict[str, object]:
-    student_vote = poll.votes.filter(student=student).select_related('option').first()
-    vote_counts = {
-        row['option_id']: row['count']
-        for row in poll.votes.values('option_id').annotate(count=Count('id'))
-    }
+    # Use prefetched vote/option data when available to avoid per-poll DB queries.
+    votes = list(poll.votes.all())
+    student_vote = next((vote for vote in votes if vote.student_id == student.roll_number), None)
+
+    vote_counts: dict[int, int] = {}
+    for vote in votes:
+        vote_counts[vote.option_id] = vote_counts.get(vote.option_id, 0) + 1
     total_votes = sum(vote_counts.values())
 
     options_payload: list[dict[str, object]] = []
-    for option in poll.options.all().order_by('id'):
+    for option in sorted(poll.options.all(), key=lambda item: item.id):
         count = vote_counts.get(option.id, 0)
         percentage = round((count / total_votes) * 100, 1) if total_votes else 0.0
         options_payload.append(
