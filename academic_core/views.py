@@ -14,7 +14,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
-from django.db.models import Max, Prefetch, Q
+from django.db.models import Max, Prefetch, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
@@ -967,7 +967,10 @@ def finance_split(request) -> Response:
         amount=amount,
         description=description[:255],
     )
-    serializer = PeerTransactionSerializer(transaction_obj)
+    serializer = PeerTransactionSerializer(
+        transaction_obj,
+        context={'request': request, 'current_student': creditor},
+    )
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -1009,7 +1012,11 @@ def finance_dues(request) -> Response:
         .filter(debtor=student, is_settled=False)
         .order_by('-created_at')
     )
-    serializer = PeerTransactionSerializer(dues, many=True)
+    serializer = PeerTransactionSerializer(
+        dues,
+        many=True,
+        context={'request': request, 'current_student': student},
+    )
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -1022,14 +1029,91 @@ def finance_settle(request, transaction_id: int) -> Response:
     transaction_obj = get_object_or_404(
         PeerTransaction.objects.select_related('creditor', 'debtor'),
         pk=transaction_id,
-        debtor=student,
     )
-    if not transaction_obj.is_settled:
-        transaction_obj.is_settled = True
-        transaction_obj.save(update_fields=['is_settled'])
+    if transaction_obj.creditor_id != student.roll_number and transaction_obj.debtor_id != student.roll_number:
+        return Response(
+            {'detail': 'You are not allowed to update this transaction.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
-    serializer = PeerTransactionSerializer(transaction_obj)
+    action = str(request.data.get('action', '')).strip().lower()
+    if not action:
+        action = 'mark_paid' if transaction_obj.debtor_id == student.roll_number else 'confirm_received'
+
+    if action in {'mark_paid', 'debtor_confirm', 'paid'}:
+        if transaction_obj.debtor_id != student.roll_number:
+            return Response(
+                {'detail': 'Only the debtor can mark payment as done.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        transaction_obj.debtor_confirmed = True
+    elif action in {'confirm_received', 'creditor_confirm', 'received'}:
+        if transaction_obj.creditor_id != student.roll_number:
+            return Response(
+                {'detail': 'Only the creditor can confirm receipt.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not transaction_obj.debtor_confirmed:
+            return Response(
+                {'detail': 'Debtor must mark payment first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        transaction_obj.creditor_confirmed = True
+    else:
+        return Response(
+            {'detail': 'Invalid action. Use mark_paid or confirm_received.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if transaction_obj.debtor_confirmed and transaction_obj.creditor_confirmed:
+        transaction_obj.is_settled = True
+        if transaction_obj.settled_at is None:
+            transaction_obj.settled_at = timezone.now()
+
+    update_fields = ['debtor_confirmed', 'creditor_confirmed', 'is_settled', 'settled_at']
+    transaction_obj.save(update_fields=update_fields)
+
+    serializer = PeerTransactionSerializer(
+        transaction_obj,
+        context={'request': request, 'current_student': student},
+    )
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+def finance_records(request) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    all_records = (
+        PeerTransaction.objects.select_related('creditor', 'debtor')
+        .filter(Q(creditor=student) | Q(debtor=student))
+        .order_by('-created_at')
+    )
+    you_owe_qs = all_records.filter(debtor=student, is_settled=False)
+    owed_to_you_qs = all_records.filter(creditor=student, is_settled=False)
+
+    total_you_owe = you_owe_qs.aggregate(total=Sum('amount')).get('total') or Decimal('0.00')
+    total_owed_to_you = owed_to_you_qs.aggregate(total=Sum('amount')).get('total') or Decimal('0.00')
+
+    context = {'request': request, 'current_student': student}
+    payload = {
+        'summary': {
+            'total_you_owe': str(total_you_owe),
+            'total_owed_to_you': str(total_owed_to_you),
+            'pending_debtor_validation': you_owe_qs.filter(debtor_confirmed=False).count(),
+            'pending_creditor_validation': owed_to_you_qs.filter(
+                debtor_confirmed=True,
+                creditor_confirmed=False,
+            ).count(),
+            'total_records': all_records.count(),
+        },
+        'you_owe': PeerTransactionSerializer(you_owe_qs, many=True, context=context).data,
+        'owed_to_you': PeerTransactionSerializer(owed_to_you_qs, many=True, context=context).data,
+        'history': PeerTransactionSerializer(all_records[:120], many=True, context=context).data,
+    }
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
@@ -1038,7 +1122,10 @@ def finance_notifications(request) -> Response:
     if error_response:
         return error_response
 
-    count = PeerTransaction.objects.filter(debtor=student, is_settled=False).count()
+    count = PeerTransaction.objects.filter(is_settled=False).filter(
+        Q(debtor=student, debtor_confirmed=False)
+        | Q(creditor=student, debtor_confirmed=True, creditor_confirmed=False)
+    ).count()
     return Response({'count': count}, status=status.HTTP_200_OK)
 
 

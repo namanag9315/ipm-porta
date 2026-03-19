@@ -297,6 +297,51 @@ class PeerTransactionSerializer(serializers.ModelSerializer):
     creditor_name = serializers.CharField(source='creditor.name', read_only=True)
     debtor_name = serializers.CharField(source='debtor.name', read_only=True)
     creditor_upi_id = serializers.CharField(source='creditor.upi_id', read_only=True)
+    settlement_stage = serializers.SerializerMethodField()
+    can_mark_paid = serializers.SerializerMethodField()
+    can_confirm_received = serializers.SerializerMethodField()
+
+    def _current_student_roll(self):
+        current_student = self.context.get('current_student')
+        if current_student is not None:
+            return str(current_student.roll_number)
+        request = self.context.get('request')
+        if request is None:
+            return ''
+        return str(
+            request.headers.get('X-Student-Roll-Number')
+            or request.query_params.get('roll_number')
+            or request.data.get('roll_number')
+            or ''
+        ).strip().upper()
+
+    def get_settlement_stage(self, obj):
+        if obj.is_settled:
+            return 'settled'
+        if obj.debtor_confirmed and not obj.creditor_confirmed:
+            return 'awaiting_creditor_confirmation'
+        if obj.creditor_confirmed and not obj.debtor_confirmed:
+            return 'awaiting_debtor_confirmation'
+        return 'open'
+
+    def get_can_mark_paid(self, obj):
+        current_roll = self._current_student_roll()
+        return bool(
+            current_roll
+            and current_roll == obj.debtor_id
+            and not obj.is_settled
+            and not obj.debtor_confirmed
+        )
+
+    def get_can_confirm_received(self, obj):
+        current_roll = self._current_student_roll()
+        return bool(
+            current_roll
+            and current_roll == obj.creditor_id
+            and not obj.is_settled
+            and obj.debtor_confirmed
+            and not obj.creditor_confirmed
+        )
 
     class Meta:
         model = PeerTransaction
@@ -309,7 +354,13 @@ class PeerTransactionSerializer(serializers.ModelSerializer):
             'creditor_upi_id',
             'amount',
             'description',
+            'debtor_confirmed',
+            'creditor_confirmed',
             'is_settled',
+            'settled_at',
+            'settlement_stage',
+            'can_mark_paid',
+            'can_confirm_received',
             'created_at',
         ]
         read_only_fields = [
@@ -319,7 +370,13 @@ class PeerTransactionSerializer(serializers.ModelSerializer):
             'creditor_name',
             'debtor_name',
             'creditor_upi_id',
+            'debtor_confirmed',
+            'creditor_confirmed',
             'is_settled',
+            'settled_at',
+            'settlement_stage',
+            'can_mark_paid',
+            'can_confirm_received',
             'created_at',
         ]
 

@@ -1,8 +1,27 @@
-import { Loader2, PlusCircle, Search, WalletCards } from 'lucide-react'
+import { CheckCircle2, Clock3, Loader2, PlusCircle, Search, WalletCards } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 import SettleUpCard from '../components/finance/SettleUpCard'
 import api from '../lib/api'
+import { formatDateLabel } from '../lib/date'
+
+function formatMoney(value) {
+  const numeric = Number(value || 0)
+  return `Rs ${numeric.toFixed(2)}`
+}
+
+function statusLabel(record) {
+  if (record?.is_settled) {
+    return 'Settled'
+  }
+  if (record?.debtor_confirmed && !record?.creditor_confirmed) {
+    return 'Awaiting creditor confirmation'
+  }
+  if (!record?.debtor_confirmed) {
+    return 'Awaiting debtor payment'
+  }
+  return 'Open'
+}
 
 export default function SplitSettleView() {
   const [debtorRollNumber, setDebtorRollNumber] = useState('')
@@ -15,6 +34,20 @@ export default function SplitSettleView() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
+  const [recordsLoading, setRecordsLoading] = useState(true)
+  const [actionLoadingId, setActionLoadingId] = useState('')
+  const [records, setRecords] = useState({
+    summary: {
+      total_you_owe: '0.00',
+      total_owed_to_you: '0.00',
+      pending_debtor_validation: 0,
+      pending_creditor_validation: 0,
+      total_records: 0,
+    },
+    you_owe: [],
+    owed_to_you: [],
+    history: [],
+  })
 
   useEffect(() => {
     let isMounted = true
@@ -53,6 +86,66 @@ export default function SplitSettleView() {
     })
     return map
   }, [studentOptions])
+
+  async function fetchRecords() {
+    setRecordsLoading(true)
+    try {
+      const response = await api.get('/api/v1/finance/records/')
+      const data = response.data || {}
+      setRecords({
+        summary: data.summary || {
+          total_you_owe: '0.00',
+          total_owed_to_you: '0.00',
+          pending_debtor_validation: 0,
+          pending_creditor_validation: 0,
+          total_records: 0,
+        },
+        you_owe: Array.isArray(data.you_owe) ? data.you_owe : [],
+        owed_to_you: Array.isArray(data.owed_to_you) ? data.owed_to_you : [],
+        history: Array.isArray(data.history) ? data.history : [],
+      })
+    } catch {
+      setRecords({
+        summary: {
+          total_you_owe: '0.00',
+          total_owed_to_you: '0.00',
+          pending_debtor_validation: 0,
+          pending_creditor_validation: 0,
+          total_records: 0,
+        },
+        you_owe: [],
+        owed_to_you: [],
+        history: [],
+      })
+    } finally {
+      setRecordsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchRecords()
+  }, [])
+
+  async function submitRecordAction(transactionId, action) {
+    setError('')
+    setSuccess('')
+    setActionLoadingId(`${action}-${transactionId}`)
+    try {
+      await api.patch(`/api/v1/finance/settle/${transactionId}/`, {
+        action,
+      })
+      await fetchRecords()
+      setSuccess(
+        action === 'mark_paid'
+          ? 'Marked as paid. Waiting for creditor confirmation.'
+          : 'Payment confirmed and transaction updated.',
+      )
+    } catch (actionError) {
+      setError(actionError?.response?.data?.detail || 'Unable to update this transaction right now.')
+    } finally {
+      setActionLoadingId('')
+    }
+  }
 
   async function submitSplit(event) {
     event.preventDefault()
@@ -96,6 +189,7 @@ export default function SplitSettleView() {
       setDescription('')
       setFieldErrors({})
       setSuccess('Split created successfully.')
+      await fetchRecords()
     } catch (submitError) {
       setError(submitError?.response?.data?.detail || 'Unable to create split right now.')
     } finally {
@@ -233,6 +327,133 @@ export default function SplitSettleView() {
             {success}
           </div>
         ) : null}
+      </section>
+
+      <section className="grid gap-3 md:grid-cols-2">
+        <article className="rounded-3xl border border-rose-200 bg-rose-50 p-5 shadow-soft">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rose-600">Total You Owe</p>
+          <p className="mt-2 text-2xl font-bold text-rose-700">{formatMoney(records.summary.total_you_owe)}</p>
+          <p className="mt-1 text-xs text-rose-700/80">
+            Pending your validation: {records.summary.pending_debtor_validation || 0}
+          </p>
+        </article>
+        <article className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 shadow-soft">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">Total Owed To You</p>
+          <p className="mt-2 text-2xl font-bold text-emerald-700">{formatMoney(records.summary.total_owed_to_you)}</p>
+          <p className="mt-1 text-xs text-emerald-700/80">
+            Pending your validation: {records.summary.pending_creditor_validation || 0}
+          </p>
+        </article>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-soft">
+          <div className="mb-4 flex items-center gap-2">
+            <Clock3 className="h-5 w-5 text-rose-600" />
+            <h3 className="heading-tight text-lg font-semibold text-slate-900">You Owe</h3>
+          </div>
+          {recordsLoading ? (
+            <p className="text-sm text-slate-500">Loading records...</p>
+          ) : records.you_owe.length === 0 ? (
+            <p className="text-sm text-slate-500">No pending payments.</p>
+          ) : (
+            <div className="space-y-3">
+              {records.you_owe.map((record) => (
+                <div key={record.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-sm text-slate-800">
+                    You owe <span className="font-semibold">{record.creditor_name}</span>{' '}
+                    <span className="font-semibold">{formatMoney(record.amount)}</span> for {record.description}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">{statusLabel(record)}</p>
+                  {record.can_mark_paid ? (
+                    <button
+                      type="button"
+                      onClick={() => submitRecordAction(record.id, 'mark_paid')}
+                      disabled={actionLoadingId === `mark_paid-${record.id}`}
+                      className="mt-2 inline-flex items-center gap-1 rounded-lg bg-iim-blue px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-70"
+                    >
+                      {actionLoadingId === `mark_paid-${record.id}` ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                      )}
+                      I Have Paid
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
+
+        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-soft">
+          <div className="mb-4 flex items-center gap-2">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            <h3 className="heading-tight text-lg font-semibold text-slate-900">People Owe You</h3>
+          </div>
+          {recordsLoading ? (
+            <p className="text-sm text-slate-500">Loading records...</p>
+          ) : records.owed_to_you.length === 0 ? (
+            <p className="text-sm text-slate-500">No pending receivables.</p>
+          ) : (
+            <div className="space-y-3">
+              {records.owed_to_you.map((record) => (
+                <div key={record.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-sm text-slate-800">
+                    <span className="font-semibold">{record.debtor_name}</span> owes you{' '}
+                    <span className="font-semibold">{formatMoney(record.amount)}</span> for {record.description}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">{statusLabel(record)}</p>
+                  {record.can_confirm_received ? (
+                    <button
+                      type="button"
+                      onClick={() => submitRecordAction(record.id, 'confirm_received')}
+                      disabled={actionLoadingId === `confirm_received-${record.id}`}
+                      className="mt-2 inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-70"
+                    >
+                      {actionLoadingId === `confirm_received-${record.id}` ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                      )}
+                      Confirm Received
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
+      </section>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-soft">
+        <h3 className="heading-tight text-lg font-semibold text-slate-900">Transaction History</h3>
+        {recordsLoading ? (
+          <p className="mt-3 text-sm text-slate-500">Loading history...</p>
+        ) : records.history.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-500">No transactions yet.</p>
+        ) : (
+          <div className="mt-3 max-h-[320px] space-y-2 overflow-y-auto pr-1">
+            {records.history.map((record) => (
+              <div key={record.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-slate-800">
+                    {record.debtor_name} to {record.creditor_name}
+                  </p>
+                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                    {statusLabel(record)}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-600">
+                  {formatMoney(record.amount)} • {record.description}
+                </p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Created: {formatDateLabel(record.created_at)} {record.settled_at ? `• Settled: ${formatDateLabel(record.settled_at)}` : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <SettleUpCard />

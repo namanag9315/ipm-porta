@@ -289,13 +289,17 @@ class PeerTransaction(models.Model):
     )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.CharField(max_length=255)
+    debtor_confirmed = models.BooleanField(default=False, db_index=True)
+    creditor_confirmed = models.BooleanField(default=False, db_index=True)
     is_settled = models.BooleanField(default=False, db_index=True)
+    settled_at = models.DateTimeField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
         indexes = [
             models.Index(fields=['debtor', 'is_settled']),
             models.Index(fields=['creditor', 'is_settled']),
+            models.Index(fields=['is_settled', 'settled_at']),
         ]
 
     def __str__(self) -> str:

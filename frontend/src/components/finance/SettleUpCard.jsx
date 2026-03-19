@@ -58,7 +58,9 @@ export default function SettleUpCard() {
     setSettling(true)
     setError('')
     try {
-      await api.patch(`/api/v1/finance/settle/${selectedDue.id}/`, {})
+      await api.patch(`/api/v1/finance/settle/${selectedDue.id}/`, {
+        action: 'mark_paid',
+      })
       setDues((current) => current.filter((item) => item.id !== selectedDue.id))
       setSelectedDue(null)
     } catch (settleError) {
