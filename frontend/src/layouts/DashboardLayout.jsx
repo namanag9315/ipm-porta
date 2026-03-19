@@ -18,6 +18,7 @@ import {
   UserRoundCog,
   Users,
   UtensilsCrossed,
+  WalletCards,
   X,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -49,6 +50,7 @@ const navSections = [
       { to: '/dashboard/noticeboard', label: 'Noticeboard', icon: BellRing },
       { to: '/sharing', label: 'Campus Sharing', icon: Users },
       { to: '/dashboard/polls', label: 'Polls', icon: ScrollText },
+      { to: '/dashboard/split-settle', label: 'Split & Settle', icon: WalletCards },
       { to: '/dashboard/bus-schedule', label: 'Bus Schedule', icon: Bus },
       { to: '/dashboard/loan-calculator', label: 'Loan Calculator', icon: IndianRupee },
     ],

@@ -18,6 +18,7 @@ import NoticeboardView from './pages/NoticeboardView'
 import PollsView from './pages/PollsView'
 import ProfileView from './pages/ProfileView'
 import ReadingsView from './pages/ReadingsView'
+import SplitSettleView from './pages/SplitSettleView'
 import TimetableView from './pages/TimetableView'
 import IPMOProtectedRoute from './routes/IPMOProtectedRoute'
 import ProtectedRoute from './routes/ProtectedRoute'
@@ -63,6 +64,7 @@ function AppRoutes() {
         <Route path="polls" element={<PollsView />} />
         <Route path="bus-schedule" element={<BusScheduleView />} />
         <Route path="loan-calculator" element={<LoanCalculator />} />
+        <Route path="split-settle" element={<SplitSettleView />} />
         <Route path="readings" element={<ReadingsView />} />
         <Route path="profile" element={<ProfileView />} />
       </Route>

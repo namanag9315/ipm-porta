@@ -1,6 +1,7 @@
 import { Loader2, QrCode, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import QRCode from 'react-qr-code'
+import { Link } from 'react-router-dom'
 
 import api from '../../lib/api'
 
@@ -72,6 +73,12 @@ export default function SettleUpCard() {
       <div className="mb-4 flex items-center gap-2">
         <QrCode className="h-5 w-5 text-iim-blue" />
         <h2 className="heading-tight text-lg font-semibold text-slate-900">Split &amp; Settle</h2>
+        <Link
+          to="/dashboard/split-settle"
+          className="ml-auto text-xs font-semibold text-iim-blue hover:underline"
+        >
+          Open full tab
+        </Link>
       </div>
 
       {loading ? <p className="text-sm text-slate-500">Loading dues...</p> : null}
