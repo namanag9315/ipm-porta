@@ -2,7 +2,7 @@ from django.test import TestCase
 
 from academic_core.models import AttendanceRecord, Batch, StudentCourse
 from academic_core.tasks import _attendance_mark_column_indices, _count_attendance_marks, parse_attendance
-from academic_core.views import _pick_gemini_model_name
+from academic_core.views import _is_gemini_quota_error, _pick_gemini_model_name
 
 
 class AttendanceParsingTests(TestCase):
@@ -88,3 +88,10 @@ class GeminiModelSelectionTests(TestCase):
             ['models/gemini-2.0-pro', 'models/gemini-2.0-flash'],
         )
         self.assertEqual(picked, 'models/gemini-2.0-flash')
+
+    def test_detects_quota_error_message(self):
+        error_text = '429 Quota exceeded for metric generate_content_free_tier_requests'
+        self.assertTrue(_is_gemini_quota_error(error_text))
+
+    def test_non_quota_message_returns_false(self):
+        self.assertFalse(_is_gemini_quota_error('Gemini returned an empty draft.'))

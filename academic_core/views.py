@@ -444,6 +444,18 @@ def _pick_gemini_model_name(preferred_model: str, available_model_names: list[st
     return preferred_model or 'gemini-2.0-flash'
 
 
+def _is_gemini_quota_error(error_text: str) -> bool:
+    normalized = str(error_text or '').lower()
+    if not normalized:
+        return False
+    return (
+        'quota exceeded' in normalized
+        or 'resource_exhausted' in normalized
+        or 'rate limit' in normalized
+        or ('429' in normalized and 'gemini' in normalized)
+    )
+
+
 def _generate_gemini_draft(prompt: str) -> str:
     api_key = (
         os.getenv('GEMINI_API_KEY', '').strip()
@@ -2042,15 +2054,28 @@ def cr_generate_draft(request) -> Response:
 
     try:
         draft = _generate_gemini_draft(prompt)
-    except ValueError as exc:
-        return Response({'detail': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({'draft': draft, 'source': 'gemini'}, status=status.HTTP_200_OK)
     except Exception as exc:
-        return Response(
-            {'detail': f'Unable to generate draft right now: {exc}'},
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
+        logger.warning('Gemini draft generation failed: %s', exc)
+        fallback = _generate_announcement_draft(prompt)
+        fallback_draft = str(fallback.get('content', '')).strip()
+        if not fallback_draft:
+            return Response(
+                {'detail': f'Unable to generate draft right now: {exc}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
-    return Response({'draft': draft}, status=status.HTTP_200_OK)
+        reason = 'Gemini unavailable. Returned fallback draft.'
+        if _is_gemini_quota_error(str(exc)):
+            reason = 'Gemini quota exceeded. Returned fallback draft.'
+        return Response(
+            {
+                'draft': fallback_draft,
+                'source': 'fallback',
+                'detail': reason,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 @api_view(['GET', 'POST'])
