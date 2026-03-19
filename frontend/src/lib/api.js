@@ -19,6 +19,9 @@ api.interceptors.request.use((config) => {
   if (user?.batchCode && !config.headers['X-Batch-Code']) {
     config.headers['X-Batch-Code'] = user.batchCode
   }
+  if (user?.rollNumber && !config.headers['X-Student-Roll-Number']) {
+    config.headers['X-Student-Roll-Number'] = user.rollNumber
+  }
   return config
 })
 

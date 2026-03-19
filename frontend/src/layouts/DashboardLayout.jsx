@@ -26,6 +26,7 @@ import { useEffect, useState } from 'react'
 
 import { useAuth } from '../hooks/useAuth'
 import { cn } from '../lib/cn'
+import FinanceNotificationBell from '../components/finance/FinanceNotificationBell'
 
 const navSections = [
   {
@@ -238,13 +239,17 @@ export default function DashboardLayout() {
                 </div>
               </div>
 
-              <div className="inline-flex items-center gap-3 rounded-full border border-white/70 bg-white/70 px-3 py-2 shadow-sm">
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-iim-blue text-sm font-semibold text-white">
-                  {(user?.name || user?.rollNumber || 'S').charAt(0).toUpperCase()}
-                </div>
-                <div className="hidden sm:block">
-                  <p className="text-xs text-slate-500">Roll Number</p>
-                  <p className="text-sm font-medium text-slate-800">{user?.rollNumber || 'N/A'}</p>
+              <div className="flex items-center gap-3">
+                <FinanceNotificationBell />
+
+                <div className="inline-flex items-center gap-3 rounded-full border border-white/70 bg-white/70 px-3 py-2 shadow-sm">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-iim-blue text-sm font-semibold text-white">
+                    {(user?.name || user?.rollNumber || 'S').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="hidden sm:block">
+                    <p className="text-xs text-slate-500">Roll Number</p>
+                    <p className="text-sm font-medium text-slate-800">{user?.rollNumber || 'N/A'}</p>
+                  </div>
                 </div>
               </div>
             </div>

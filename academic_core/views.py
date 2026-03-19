@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import threading
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 import requests
@@ -39,6 +40,7 @@ from academic_core.models import (
     Poll,
     PollOption,
     PollVote,
+    PeerTransaction,
     SellPost,
     Student,
     StudentCourse,
@@ -59,6 +61,7 @@ from academic_core.serializers import (
     GradeDocumentSerializer,
     MessMenuSerializer,
     PollSerializer,
+    PeerTransactionSerializer,
     SellPostSerializer,
     StudentSerializer,
     TermSettingsSerializer,
@@ -870,6 +873,114 @@ def update_or_delete_sell_post(request, post_id: int) -> Response:
         post.save(update_fields=['is_active'])
     serializer = SellPostSerializer(post)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+def finance_split(request) -> Response:
+    creditor, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    debtor_roll_number = str(
+        request.data.get('debtor_roll_number') or request.data.get('debtor') or ''
+    ).strip().upper()
+    description = str(request.data.get('description', '')).strip()
+    raw_amount = request.data.get('amount')
+
+    if not debtor_roll_number:
+        return Response(
+            {'detail': 'debtor_roll_number is required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not description:
+        return Response(
+            {'detail': 'description is required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if raw_amount in (None, ''):
+        return Response(
+            {'detail': 'amount is required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if debtor_roll_number == creditor.roll_number:
+        return Response(
+            {'detail': 'You cannot create a self-transaction.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    debtor = Student.objects.filter(roll_number=debtor_roll_number).first()
+    if debtor is None:
+        return Response(
+            {'detail': 'Debtor student not found.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        amount = Decimal(str(raw_amount))
+    except (InvalidOperation, TypeError, ValueError):
+        return Response(
+            {'detail': 'Invalid amount.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if amount <= 0:
+        return Response(
+            {'detail': 'Amount must be greater than zero.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    transaction_obj = PeerTransaction.objects.create(
+        creditor=creditor,
+        debtor=debtor,
+        amount=amount,
+        description=description[:255],
+    )
+    serializer = PeerTransactionSerializer(transaction_obj)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+def finance_dues(request) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    dues = (
+        PeerTransaction.objects.select_related('creditor', 'debtor')
+        .filter(debtor=student, is_settled=False)
+        .order_by('-created_at')
+    )
+    serializer = PeerTransactionSerializer(dues, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['PATCH'])
+def finance_settle(request, transaction_id: int) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    transaction_obj = get_object_or_404(
+        PeerTransaction.objects.select_related('creditor', 'debtor'),
+        pk=transaction_id,
+        debtor=student,
+    )
+    if not transaction_obj.is_settled:
+        transaction_obj.is_settled = True
+        transaction_obj.save(update_fields=['is_settled'])
+
+    serializer = PeerTransactionSerializer(transaction_obj)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+def finance_notifications(request) -> Response:
+    student, error_response = _student_from_request(request)
+    if error_response:
+        return error_response
+
+    count = PeerTransaction.objects.filter(debtor=student, is_settled=False).count()
+    return Response({'count': count}, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])

@@ -20,6 +20,7 @@ from academic_core.models import (
     Poll,
     PollOption,
     PollVote,
+    PeerTransaction,
     SellPost,
     Student,
     TermSettings,
@@ -290,6 +291,37 @@ class PollVoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = PollVote
         fields = ['id', 'poll', 'option', 'student', 'created_at']
+
+
+class PeerTransactionSerializer(serializers.ModelSerializer):
+    creditor_name = serializers.CharField(source='creditor.name', read_only=True)
+    debtor_name = serializers.CharField(source='debtor.name', read_only=True)
+    creditor_upi_id = serializers.CharField(source='creditor.upi_id', read_only=True)
+
+    class Meta:
+        model = PeerTransaction
+        fields = [
+            'id',
+            'creditor',
+            'debtor',
+            'creditor_name',
+            'debtor_name',
+            'creditor_upi_id',
+            'amount',
+            'description',
+            'is_settled',
+            'created_at',
+        ]
+        read_only_fields = [
+            'id',
+            'creditor',
+            'debtor',
+            'creditor_name',
+            'debtor_name',
+            'creditor_upi_id',
+            'is_settled',
+            'created_at',
+        ]
 
 
 class CourseMaterialSerializer(serializers.ModelSerializer):

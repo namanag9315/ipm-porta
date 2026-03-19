@@ -32,6 +32,7 @@ class Student(models.Model):
     name = models.CharField(max_length=100)
     section = models.CharField(max_length=1, choices=SECTION_CHOICES)
     email = models.EmailField(unique=True)
+    upi_id = models.CharField(max_length=50, blank=True, null=True)
     password = models.CharField(max_length=128, blank=True, default='')
     date_of_birth = models.DateField(null=True, blank=True)
     is_ipmo = models.BooleanField(default=False, db_index=True)
@@ -273,6 +274,32 @@ class PollVote(models.Model):
 
     def __str__(self) -> str:
         return f'{self.student_id} -> {self.poll_id}:{self.option_id}'
+
+
+class PeerTransaction(models.Model):
+    creditor = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name='money_to_receive',
+    )
+    debtor = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name='money_to_pay',
+    )
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    description = models.CharField(max_length=255)
+    is_settled = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['debtor', 'is_settled']),
+            models.Index(fields=['creditor', 'is_settled']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.debtor_id} owes {self.creditor_id} Rs {self.amount}'
 
 
 class TermSettings(models.Model):
