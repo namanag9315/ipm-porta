@@ -148,3 +148,20 @@ class MessMenuParsingTests(TestCase):
         self.assertEqual(breakfast_items[0].item_name, 'Poha')
         self.assertEqual(str(breakfast_items[1].date), '2026-03-25')
         self.assertEqual(breakfast_items[1].item_name, 'Paratha')
+
+    def test_parse_mess_menu_uses_latest_date_header_row_before_day_row(self):
+        batch, _ = Batch.objects.get_or_create(code='IPM03', defaults={'name': 'IPM03', 'is_active': True})
+        sheet_data = [
+            ['', 'DATE', '2026-03-01', '2026-03-02'],
+            ['', '', '2026-03-15', '2026-03-16'],
+            ['', 'DAY', 'Mon', 'Tue'],
+            ['', 'BREAKFAST', '', ''],
+            ['', 'HOT PREPARATION', 'Poha', 'Upma'],
+            ['', 'LUNCH', '', ''],
+        ]
+
+        parse_mess_menu(sheet_data, batch=batch)
+        created_dates = sorted(
+            {str(value) for value in MessMenu.objects.filter(batch=batch).values_list('date', flat=True)}
+        )
+        self.assertEqual(created_dates, ['2026-03-15', '2026-03-16'])

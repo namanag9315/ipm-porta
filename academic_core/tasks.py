@@ -1058,8 +1058,21 @@ def parse_mess_menu(sheet_data: list[list[Any]], *, batch: Batch | None = None) 
         if day_row_index is None:
             continue
 
-        date_row = rows[row_index]
-        parsed_dates = [_parse_date(value) for value in date_row[date_col_index + 1 :]]
+        # Some bridge payloads keep the same header in two physical rows:
+        # "DATE" row + continuation row (blank first cell) with the latest dates.
+        # We use the last date-bearing row before DAY to align menu columns
+        # with the currently active fortnight.
+        parsed_date_rows: list[list[date | None]] = []
+        for date_probe_index in range(row_index, day_row_index):
+            probe_row = rows[date_probe_index]
+            probe_dates = [_parse_date(value) for value in probe_row[date_col_index + 1 :]]
+            if any(probe_dates):
+                parsed_date_rows.append(probe_dates)
+
+        if not parsed_date_rows:
+            continue
+
+        parsed_dates = parsed_date_rows[-1]
         if not any(parsed_dates):
             continue
 
