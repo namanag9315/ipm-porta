@@ -187,6 +187,34 @@ function normalizeCourseDisplayName(value) {
   return cleaned || 'Course'
 }
 
+const PRIMARY_RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504])
+
+const sleep = (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs))
+
+async function getWithRetry(url, { signal, timeoutMs }) {
+  let lastError = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await api.get(url, {
+        signal,
+        timeout: attempt === 0 ? timeoutMs : timeoutMs * 2,
+      })
+    } catch (error) {
+      if (error?.name === 'CanceledError') {
+        throw error
+      }
+      lastError = error
+      const status = error?.response?.status
+      const retryable = !error?.response || PRIMARY_RETRYABLE_STATUSES.has(status)
+      if (!retryable || attempt === 1) {
+        throw error
+      }
+      await sleep(450)
+    }
+  }
+  throw lastError
+}
+
 function buildDashboardPollAnnouncement(polls) {
   const activePolls = Array.isArray(polls) ? polls : []
   if (activePolls.length === 0) {
@@ -256,13 +284,13 @@ export default function Dashboard() {
         })
 
         const [attendanceResult, timetableResult] = await Promise.allSettled([
-          api.get(`/api/v1/attendance/${user.rollNumber}/`, {
+          getWithRetry(`/api/v1/attendance/${user.rollNumber}/`, {
             signal: controller.signal,
-            timeout: DASHBOARD_PRIMARY_TIMEOUT_MS,
+            timeoutMs: DASHBOARD_PRIMARY_TIMEOUT_MS,
           }),
-          api.get(`/api/v1/timetable/${user.rollNumber}/`, {
+          getWithRetry(`/api/v1/timetable/${user.rollNumber}/`, {
             signal: controller.signal,
-            timeout: DASHBOARD_PRIMARY_TIMEOUT_MS,
+            timeoutMs: DASHBOARD_PRIMARY_TIMEOUT_MS,
           }),
         ])
 
@@ -281,8 +309,20 @@ export default function Dashboard() {
           setSessions([])
         }
 
-        if (!attendanceRes || !timetableRes) {
-          setError('Some core dashboard data could not be loaded yet. Please refresh in a moment.')
+        const primaryFailures = []
+        if (!attendanceRes) {
+          const status = attendanceResult.status === 'rejected' ? attendanceResult.reason?.response?.status : ''
+          primaryFailures.push(`attendance${status ? ` (${status})` : ''}`)
+        }
+        if (!timetableRes) {
+          const status = timetableResult.status === 'rejected' ? timetableResult.reason?.response?.status : ''
+          primaryFailures.push(`timetable${status ? ` (${status})` : ''}`)
+        }
+
+        if (primaryFailures.length === 2) {
+          setError('Unable to load core dashboard data right now. Please try again in a moment.')
+        } else if (primaryFailures.length === 1) {
+          setError(`Some core dashboard data is delayed: ${primaryFailures[0]}.`)
         }
         setLoading(false)
 
