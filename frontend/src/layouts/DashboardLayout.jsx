@@ -1,139 +1,24 @@
 import {
-  BellRing,
-  BookOpenText,
-  Bus,
-  ChevronDown,
-  ChevronUp,
-  Calculator,
-  CalendarDays,
-  ClipboardCheck,
-  FileCheck2,
-  IndianRupee,
-  LayoutDashboard,
   LogOut,
   Menu,
-  Megaphone,
-  ScrollText,
-  ShieldCheck,
-  UserRoundCog,
-  Users,
-  UtensilsCrossed,
-  WalletCards,
   X,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 
 import { useAuth } from '../hooks/useAuth'
-import { cn } from '../lib/cn'
 import FinanceNotificationBell from '../components/finance/FinanceNotificationBell'
-
-const navSections = [
-  {
-    key: 'academics',
-    title: 'Academics',
-    items: [
-      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
-      { to: '/dashboard/timetable', label: 'Timetable', icon: CalendarDays },
-      { to: '/dashboard/attendance', label: 'Attendance', icon: ClipboardCheck },
-      { to: '/dashboard/assignments', label: 'Assignments', icon: FileCheck2 },
-      { to: '/dashboard/readings', label: 'Readings', icon: BookOpenText },
-      { to: '/calculator', label: 'Grade Simulator', icon: Calculator },
-    ],
-  },
-  {
-    key: 'campus',
-    title: 'Campus Life',
-    items: [
-      { to: '/dashboard/mess-menu', label: 'Mess Menu', icon: UtensilsCrossed },
-      { to: '/dashboard/noticeboard', label: 'Noticeboard', icon: BellRing },
-      { to: '/sharing', label: 'Campus Sharing', icon: Users },
-      { to: '/dashboard/polls', label: 'Polls', icon: ScrollText },
-      { to: '/dashboard/split-settle', label: 'Split & Settle', icon: WalletCards },
-      { to: '/dashboard/bus-schedule', label: 'Bus Schedule', icon: Bus },
-      { to: '/dashboard/loan-calculator', label: 'Loan Calculator', icon: IndianRupee },
-    ],
-  },
-  {
-    key: 'admin_tools',
-    title: 'Admin / Tools',
-    items: [
-      { to: '/admin-portal', label: 'CR Portal', icon: Megaphone },
-      { to: '/ipmo', label: 'IPMO Portal', icon: ShieldCheck },
-      { to: '/dashboard/profile', label: 'Profile', icon: UserRoundCog },
-    ],
-  },
-]
+import Sidebar from '../components/layout/Sidebar'
 
 export default function DashboardLayout() {
   const location = useLocation()
   const { user, logout } = useAuth()
-  const [openSections, setOpenSections] = useState({
-    academics: true,
-    campus: true,
-    admin_tools: true,
-  })
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   useEffect(() => {
     setMobileMenuOpen(false)
   }, [location.pathname])
-
-  function toggleSection(key) {
-    setOpenSections((current) => ({
-      ...current,
-      [key]: !current[key],
-    }))
-  }
-
-  function renderNavSection(section, onItemClick) {
-    const isOpen = Boolean(openSections[section.key])
-    return (
-      <div key={section.key}>
-        <button
-          type="button"
-          onClick={() => toggleSection(section.key)}
-          className="mb-2 flex w-full items-center justify-between rounded-xl px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 transition hover:bg-white/10"
-        >
-          <span>{section.title}</span>
-          {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-        </button>
-        {isOpen ? (
-          <div className="space-y-2">
-            {section.items.map(({ to, label, icon: Icon, end }) => (
-              <NavLink key={to} to={to} end={end} onClick={onItemClick}>
-                {({ isActive }) => (
-                  <div
-                    className={cn(
-                      'group relative flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200',
-                      isActive
-                        ? 'bg-white/12 text-white'
-                        : 'text-slate-300 hover:bg-white/10 hover:text-white',
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        'absolute bottom-2 left-0 top-2 w-1 rounded-r-full transition-colors duration-200',
-                        isActive ? 'bg-iim-gold' : 'bg-transparent',
-                      )}
-                    />
-                    <Icon
-                      className={cn(
-                        'h-4 w-4 transition-colors',
-                        isActive ? 'text-white' : 'text-slate-400 group-hover:text-white',
-                      )}
-                    />
-                    <span>{label}</span>
-                  </div>
-                )}
-              </NavLink>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    )
-  }
 
   return (
     <div className="relative min-h-screen bg-hero-mesh">
@@ -149,7 +34,7 @@ export default function DashboardLayout() {
               <h2 className="mt-2 heading-tight text-2xl font-bold text-white">IPM Portal</h2>
             </div>
 
-            <nav className="space-y-5">{navSections.map((section) => renderNavSection(section))}</nav>
+            <Sidebar />
           </div>
 
           <button
@@ -197,13 +82,11 @@ export default function DashboardLayout() {
                       <X className="h-4 w-4" />
                     </button>
                   </div>
-                  <nav className="space-y-5">
-                    {navSections.map((section) =>
-                      renderNavSection(section, () => {
-                        setMobileMenuOpen(false)
-                      }),
-                    )}
-                  </nav>
+                  <Sidebar
+                    onNavigate={() => {
+                      setMobileMenuOpen(false)
+                    }}
+                  />
                 </div>
 
                 <button

@@ -22,14 +22,17 @@ const MAX_DASHBOARD_CLASSES = 3
 const DASHBOARD_PRIMARY_TIMEOUT_MS = 15000
 const DASHBOARD_SECONDARY_TIMEOUT_MS = 9000
 const COURSE_COLOR_CLASSES = [
-  'border-l-blue-500',
-  'border-l-emerald-500',
-  'border-l-violet-500',
-  'border-l-amber-500',
-  'border-l-cyan-500',
-  'border-l-fuchsia-500',
-  'border-l-orange-500',
+  'bg-blue-500',
+  'bg-emerald-500',
+  'bg-violet-500',
+  'bg-amber-500',
+  'bg-cyan-500',
+  'bg-fuchsia-500',
+  'bg-orange-500',
 ]
+const DASHBOARD_CARD_CLASS = 'rounded-2xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]'
+const DASHBOARD_CARD_TITLE_CLASS = 'text-lg font-bold text-slate-800'
+const DASHBOARD_CARD_SUBTEXT_CLASS = 'text-sm text-slate-500'
 
 const MEAL_SLOTS = [
   {
@@ -147,24 +150,24 @@ function getAssignmentDeadlineMeta(assignment, nowEpoch) {
   if (delta < 0) {
     return {
       text: 'Deadline passed',
-      classes: 'bg-slate-100 border-slate-300 text-slate-600',
+      classes: 'bg-slate-100 text-slate-600',
     }
   }
   if (delta < 24 * 60 * 60 * 1000) {
     return {
       text: `${Math.max(0, totalHours)}h left`,
-      classes: 'bg-rose-50 border-rose-200 text-rose-700 font-bold',
+      classes: 'bg-rose-50 text-rose-700 font-bold',
     }
   }
   if (delta <= 3 * 24 * 60 * 60 * 1000) {
     return {
       text: `${Math.max(1, totalDays)}d left`,
-      classes: 'bg-amber-50 border-amber-200 text-amber-700',
+      classes: 'bg-amber-50 text-amber-700',
     }
   }
   return {
     text: `${Math.max(1, totalDays)}d left`,
-    classes: 'bg-slate-50 border-slate-200 text-slate-700',
+    classes: 'bg-slate-50 text-slate-700',
   }
 }
 
@@ -549,12 +552,12 @@ export default function Dashboard() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-12">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3 lg:grid-cols-4">
         <motion.section
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35 }}
-          className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-[#1E3A8A] to-[#2B4EA2] p-6 text-white shadow-soft md:col-span-2 xl:col-span-7 xl:row-span-2"
+          className="relative col-span-1 overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-[#1E3A8A] to-[#2B4EA2] p-6 text-white shadow-[0_8px_30px_rgb(0,0,0,0.08)] md:col-span-3 lg:col-span-4"
         >
           <div className="absolute -right-8 -top-10 h-44 w-44 rounded-full bg-cyan-200/20 blur-2xl" />
           <div className="absolute -bottom-16 left-0 h-44 w-44 rounded-full bg-blue-200/20 blur-3xl" />
@@ -580,14 +583,14 @@ export default function Dashboard() {
                   return (
                     <article
                       key={session.id}
-                      className={cn(
-                        'rounded-2xl border border-white/20 border-l-4 bg-white/10 px-4 py-3 backdrop-blur-sm',
-                        sessionColorClass(session),
-                      )}
+                      className="rounded-xl bg-white/10 px-4 py-3 backdrop-blur-sm"
                     >
-                      <p className="text-sm font-semibold text-white">
-                        {session.raw_text || session.course?.name || 'Class'}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <span className={cn('h-2.5 w-2.5 rounded-full', sessionColorClass(session))} />
+                        <p className="text-sm font-semibold text-white">
+                          {session.raw_text || session.course?.name || 'Class'}
+                        </p>
+                      </div>
                       <p className="mt-1 text-xs text-white/80">
                         {formatTimeLabel(session.startAt)} - {formatTimeLabel(session.endAt)} • Room{' '}
                         {session.room}
@@ -617,58 +620,17 @@ export default function Dashboard() {
         <motion.section
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, delay: 0.05 }}
-          className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft md:col-span-2 xl:col-span-5 xl:row-span-2"
-        >
-          <div className="mb-4 flex items-center gap-2">
-            <BellRing className="h-5 w-5 text-iim-blue" />
-            <h3 className="heading-tight text-lg font-semibold text-slate-900">Announcements</h3>
-          </div>
-
-          {recentAnnouncements.length === 0 ? (
-            <p className="text-sm text-slate-500">No announcements posted yet.</p>
-          ) : (
-            <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
-              {recentAnnouncements.map((announcement) => (
-                <article
-                  key={announcement.id}
-                  className={cn(
-                    'rounded-2xl border border-slate-200/70 bg-slate-50/70 p-4',
-                    announcement?._is_poll_alert && 'border-amber-200 bg-amber-50/70',
-                  )}
-                >
-                  <p className="text-sm font-semibold text-slate-900">{announcement.title}</p>
-                  <p className="mt-1 text-xs text-slate-600">{announcement.content}</p>
-                  <p className="mt-2 text-[11px] font-medium text-slate-500">
-                    {announcement.posted_by} • {formatDateLabel(announcement.created_at)}
-                  </p>
-                  {announcement?._is_poll_alert ? (
-                    <Link
-                      to="/dashboard/polls"
-                      className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-iim-blue hover:underline"
-                    >
-                      Open Polls
-                      <ArrowRight className="h-3.5 w-3.5" />
-                    </Link>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          )}
-        </motion.section>
-
-        <motion.section
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.08 }}
-          className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft xl:col-span-4"
+          className={cn(DASHBOARD_CARD_CLASS, 'lg:col-span-2')}
         >
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-sm font-medium text-slate-500">Attendance by Course</p>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className={DASHBOARD_CARD_TITLE_CLASS}>Attendance by Course</h3>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
               Avg {averageAttendance}%
             </span>
           </div>
+          <p className={DASHBOARD_CARD_SUBTEXT_CLASS}>Live percentage by subject.</p>
+
           {courseAttendanceRows.length > 4 ? (
             <div className="mb-3 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">
               Scroll list <ChevronRight className="h-3 w-3 rotate-90" />
@@ -680,16 +642,12 @@ export default function Dashboard() {
           ) : (
             <div className="mt-4 max-h-52 space-y-3 overflow-y-auto pr-1">
               {courseAttendanceRows.map((item) => (
-                <div
-                  key={item.code}
-                  className={cn(
-                    'rounded-xl border border-slate-200/80 bg-slate-50/70 p-3',
-                    'border-l-4',
-                    courseColorClass(item.code),
-                  )}
-                >
+                <div key={item.code} className="rounded-xl bg-slate-50/80 p-3">
                   <div className="mb-1 flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-800">{item.code}</p>
+                    <div className="flex items-center gap-2">
+                      <span className={cn('h-2.5 w-2.5 rounded-full', courseColorClass(item.code))} />
+                      <p className="text-sm font-semibold text-slate-800">{item.code}</p>
+                    </div>
                     <p className="text-xs font-medium text-slate-600">{item.percentage.toFixed(2)}%</p>
                   </div>
                   <div className="h-2 rounded-full bg-slate-100">
@@ -721,14 +679,15 @@ export default function Dashboard() {
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.44, delay: 0.15 }}
-          className="group rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft xl:col-span-4"
+          className={cn(DASHBOARD_CARD_CLASS, 'group lg:col-span-1')}
         >
           <Link to="/dashboard/mess-menu" className="flex h-full flex-col justify-between">
             <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 text-iim-gold transition group-hover:scale-105 group-hover:bg-amber-100">
               <UtensilsCrossed className="h-6 w-6" />
             </div>
             <div className="mt-10">
-              <p className="heading-tight text-lg font-semibold text-slate-900">Next Meal</p>
+              <p className={DASHBOARD_CARD_TITLE_CLASS}>Next Meal</p>
+              <p className={DASHBOARD_CARD_SUBTEXT_CLASS}>Mess timeline and next serving.</p>
               {nextMeal ? (
                 <>
                   <p className="mt-1 text-sm font-medium text-slate-700">
@@ -762,25 +721,20 @@ export default function Dashboard() {
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.46, delay: 0.18 }}
-          className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft xl:col-span-4"
+          className={cn(DASHBOARD_CARD_CLASS, 'lg:col-span-1')}
         >
           <div className="mb-3 flex items-center gap-2">
             <ClipboardCheck className="h-5 w-5 text-iim-blue" />
-            <h3 className="heading-tight text-lg font-semibold text-slate-900">Upcoming Assignments</h3>
+            <h3 className={DASHBOARD_CARD_TITLE_CLASS}>Upcoming Assignments</h3>
           </div>
+          <p className={cn(DASHBOARD_CARD_SUBTEXT_CLASS, 'mb-3')}>Deadlines and quick details.</p>
 
           {assignmentRows.length === 0 ? (
             <p className="text-sm text-slate-500">No upcoming assignments right now.</p>
           ) : (
             <div className="max-h-56 space-y-3 overflow-y-auto pr-1">
               {assignmentRows.map((assignment) => (
-                <article
-                  key={assignment.id}
-                  className={cn(
-                    'rounded-2xl border p-3',
-                    assignment.deadline.classes,
-                  )}
-                >
+                <article key={assignment.id} className={cn('rounded-xl p-3', assignment.deadline.classes)}>
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-sm font-semibold text-slate-900">{assignment.title}</p>
                     <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
@@ -821,79 +775,128 @@ export default function Dashboard() {
         <motion.section
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.48, delay: 0.2 }}
-          className="group rounded-3xl border border-slate-200/80 bg-white p-6 shadow-soft xl:col-span-4"
+          transition={{ duration: 0.4, delay: 0.05 }}
+          className={cn(DASHBOARD_CARD_CLASS, 'lg:col-span-2')}
         >
-          <a
-            href={driveLink || '/dashboard/attendance'}
-            target={driveLink ? '_blank' : undefined}
-            rel={driveLink ? 'noreferrer' : undefined}
-            className="flex h-full flex-col justify-between"
-          >
-            <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-iim-blue transition group-hover:scale-105 group-hover:bg-blue-100">
-              <BookOpenText className="h-6 w-6" />
-            </div>
-
-            <div className="mt-10">
-              <p className="heading-tight text-lg font-semibold text-slate-900">Drive Materials</p>
-              <p className="mt-1 text-sm text-slate-500">
-                {driveLink ? 'Open your course resources' : 'No drive links mapped yet'}
-              </p>
-            </div>
-
-            <span
-              className={cn(
-                'mt-5 inline-flex items-center gap-2 text-sm font-medium',
-                driveLink ? 'text-iim-blue' : 'text-slate-500',
-              )}
-            >
-              {driveLink ? 'Open link' : 'Go to attendance'} <ArrowRight className="h-4 w-4" />
-            </span>
-          </a>
-        </motion.section>
-
-        <motion.section
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.24 }}
-          className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-sky-100 via-cyan-100 to-emerald-100 p-6 text-slate-900 shadow-soft xl:col-span-12"
-        >
-          <div className="absolute -right-10 -top-8 h-28 w-28 rounded-full bg-white/50 blur-2xl" />
-          <div className="relative">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">
-              <Cake className="h-4 w-4 text-iim-blue" />
-              Birthday Tracker
-            </div>
-            {birthdaysToday.length > 0 ? (
-              <>
-                <p className="mt-4 heading-tight text-xl font-semibold text-slate-900">Happy Birthday!</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {birthdaysToday.map((student) => (
-                    <span
-                      key={student.roll_number}
-                      className="rounded-full bg-white/90 px-3 py-1 text-sm font-medium text-slate-800"
-                    >
-                      {student.name}
-                    </span>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="mt-4 heading-tight text-xl font-semibold text-slate-900">No birthdays today</p>
-                <p className="mt-2 text-sm text-slate-700">
-                  This card will auto-highlight students when their birthday matches today.
-                </p>
-              </>
-            )}
+          <div className="mb-4 flex items-center gap-2">
+            <BellRing className="h-5 w-5 text-iim-blue" />
+            <h3 className={DASHBOARD_CARD_TITLE_CLASS}>Announcements</h3>
           </div>
+          <p className={cn(DASHBOARD_CARD_SUBTEXT_CLASS, 'mb-3')}>Notices and poll alerts.</p>
+
+          {recentAnnouncements.length === 0 ? (
+            <p className="text-sm text-slate-500">No announcements posted yet.</p>
+          ) : (
+            <div className="max-h-[24rem] space-y-3 overflow-y-auto pr-1">
+              {recentAnnouncements.map((announcement) => (
+                <article
+                  key={announcement.id}
+                  className={cn(
+                    'rounded-xl bg-slate-50/80 p-4',
+                    announcement?._is_poll_alert && 'bg-amber-50',
+                  )}
+                >
+                  <p className="text-sm font-semibold text-slate-900">{announcement.title}</p>
+                  <p className="mt-1 text-xs text-slate-600">{announcement.content}</p>
+                  <p className="mt-2 text-[11px] font-medium text-slate-500">
+                    {announcement.posted_by} • {formatDateLabel(announcement.created_at)}
+                  </p>
+                  {announcement?._is_poll_alert ? (
+                    <Link
+                      to="/dashboard/polls"
+                      className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-iim-blue hover:underline"
+                    >
+                      Open Polls
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          )}
         </motion.section>
+
+        <div className="space-y-6 lg:col-span-2">
+            <motion.section
+              initial={{ opacity: 0, y: 18 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.48, delay: 0.2 }}
+              className={cn(DASHBOARD_CARD_CLASS, 'group')}
+            >
+              <a
+                href={driveLink || '/dashboard/attendance'}
+                target={driveLink ? '_blank' : undefined}
+                rel={driveLink ? 'noreferrer' : undefined}
+                className="flex h-full flex-col justify-between"
+              >
+                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-iim-blue transition group-hover:scale-105 group-hover:bg-blue-100">
+                  <BookOpenText className="h-6 w-6" />
+                </div>
+
+                <div className="mt-10">
+                  <p className={DASHBOARD_CARD_TITLE_CLASS}>Drive Materials</p>
+                  <p className={cn(DASHBOARD_CARD_SUBTEXT_CLASS, 'mt-1')}>
+                    {driveLink ? 'Open your course resources' : 'No drive links mapped yet'}
+                  </p>
+                </div>
+
+                <span
+                  className={cn(
+                    'mt-5 inline-flex items-center gap-2 text-sm font-medium',
+                    driveLink ? 'text-iim-blue' : 'text-slate-500',
+                  )}
+                >
+                  {driveLink ? 'Open link' : 'Go to attendance'} <ArrowRight className="h-4 w-4" />
+                </span>
+              </a>
+            </motion.section>
+
+            <motion.section
+              initial={{ opacity: 0, y: 18 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.24 }}
+              className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-sky-100 via-cyan-100 to-emerald-100 p-6 text-slate-900 shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
+            >
+              <div className="absolute -right-10 -top-8 h-28 w-28 rounded-full bg-white/50 blur-2xl" />
+              <div className="relative">
+                <div className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                  <Cake className="h-4 w-4 text-iim-blue" />
+                  Birthday Tracker
+                </div>
+                {birthdaysToday.length > 0 ? (
+                  <>
+                    <p className="mt-4 text-lg font-bold text-slate-800">Happy Birthday!</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {birthdaysToday.map((student) => (
+                        <span
+                          key={student.roll_number}
+                          className="rounded-full bg-white/90 px-3 py-1 text-sm font-medium text-slate-800"
+                        >
+                          {student.name}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="mt-4 text-lg font-bold text-slate-800">No birthdays today</p>
+                    <p className="mt-2 text-sm text-slate-700">
+                      This card will auto-highlight students when their birthday matches today.
+                    </p>
+                  </>
+                )}
+              </div>
+            </motion.section>
+        </div>
       </div>
 
       {loading ? (
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-6 md:grid-cols-3">
           {Array.from({ length: 3 }).map((_, index) => (
-            <div key={index} className="h-28 animate-pulse rounded-3xl bg-white shadow-soft" />
+            <div
+              key={index}
+              className="h-28 animate-pulse rounded-2xl bg-white shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
+            />
           ))}
         </div>
       ) : null}
