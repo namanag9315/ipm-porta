@@ -1,31 +1,17 @@
 import { motion } from 'framer-motion'
 import {
-  AlertTriangle,
   CheckCircle2,
   Clock3,
   ExternalLink,
   FileUp,
-  ShieldCheck,
   ShieldAlert,
   UploadCloud,
-  XCircle,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 
 import { useAuth } from '../hooks/useAuth'
 import api from '../lib/api'
-import { calculateAttendanceCourseMetrics, getAttendanceInsights } from '../lib/attendance'
+import { getAttendanceInsights } from '../lib/attendance'
 import { cn } from '../lib/cn'
 
 const ATTENDANCE_MASTER_SHEET_URL =
@@ -86,59 +72,6 @@ function formatSubmittedAt(value) {
     return ''
   }
   return parsed.toLocaleString()
-}
-
-function getActionCenterTone(insights) {
-  if (insights.isCompleted) {
-    return {
-      container: 'border-slate-200 bg-slate-50 text-slate-800',
-      badge: 'bg-slate-200/70 text-slate-700',
-      icon: CheckCircle2,
-      title: 'Course Completed',
-      detail:
-        insights.gradePenalty > 0
-          ? `Closed with penalty: -${insights.gradePenalty.toFixed(2)} grade points`
-          : 'Closed safely within the attendance mandate',
-    }
-  }
-
-  if (insights.inPenaltyZone) {
-    return {
-      container: 'border-rose-200 bg-rose-50 text-rose-900',
-      badge: 'bg-rose-100 text-rose-700',
-      icon: XCircle,
-      title: `Grade Penalty Active: -${insights.gradePenalty.toFixed(2)} points`,
-      detail: `${insights.currentAbsences} absences vs ${insights.credits} allowed`,
-    }
-  }
-
-  if (insights.atAbsenceLimit) {
-    return {
-      container: 'border-amber-200 bg-amber-50 text-amber-900',
-      badge: 'bg-amber-100 text-amber-800',
-      icon: AlertTriangle,
-      title: 'No more absences allowed (0 safe skips)',
-      detail: 'Any new absence will trigger grade-point deduction',
-    }
-  }
-
-  return {
-    container: 'border-emerald-200 bg-emerald-50 text-emerald-900',
-    badge: 'bg-emerald-100 text-emerald-700',
-    icon: ShieldCheck,
-    title: `Safe to miss ${insights.safeSkips} more classes`,
-    detail: `${insights.currentAbsences} absences used out of ${insights.credits}`,
-  }
-}
-
-function getChartBarColor(course) {
-  if (course.insights.isCompleted) {
-    return '#64748b'
-  }
-  if (course.chartAttendancePercent < 80) {
-    return '#ef4444'
-  }
-  return '#10b981'
 }
 
 export default function AttendanceView() {
@@ -206,15 +139,12 @@ export default function AttendanceView() {
   const sortedRecords = useMemo(() => {
     return records
       .map((record) => {
-        const analytics = calculateAttendanceCourseMetrics(record)
         const insights = getAttendanceInsights(record)
         return {
           ...record,
           courseName: normalizeCourseDisplayName(record?.course?.name || record?.course?.code),
           courseCode: record?.course?.code || 'N/A',
-          analytics,
           insights,
-          chartAttendancePercent: analytics.attendancePercentage,
         }
       })
       .sort((left, right) => {
@@ -289,7 +219,7 @@ export default function AttendanceView() {
         <div>
           <h2 className="heading-tight text-2xl font-bold text-slate-900">Attendance Intelligence</h2>
           <p className="mt-1 text-sm text-slate-500">
-            80% attendance is mandatory per course. Every absence beyond the credit limit deducts 0.25 grade points.
+            Each credit maps to 5 classes, and the same credit count is your no-waiver miss allowance.
           </p>
         </div>
         <a
@@ -306,96 +236,6 @@ export default function AttendanceView() {
       {error ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           {error}
-        </div>
-      ) : null}
-
-      {!loading && sortedRecords.length > 0 ? (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="heading-tight text-lg font-semibold text-slate-900">Attendance Action Center</h3>
-            <p className="text-xs font-medium text-slate-500">Mandate: 80% per course • Max absences = credits</p>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {sortedRecords.map((record) => {
-              const tone = getActionCenterTone(record.insights)
-              const ToneIcon = tone.icon
-
-              return (
-                <article
-                  key={`action-${record.courseCode}`}
-                  className={cn('rounded-xl border p-4 shadow-sm transition', tone.container)}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                        {record.courseCode}
-                      </p>
-                      <p className="mt-1 text-sm font-semibold">{record.courseName}</p>
-                    </div>
-                    <span className={cn('rounded-full p-2', tone.badge)}>
-                      <ToneIcon className="h-4 w-4" />
-                    </span>
-                  </div>
-
-                  <p className="mt-4 text-sm font-semibold">{tone.title}</p>
-                  <p className="mt-1 text-xs text-slate-600">{tone.detail}</p>
-                </article>
-              )
-            })}
-          </div>
-
-          <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="heading-tight text-base font-semibold text-slate-900">Attendance % by Course</h3>
-                <p className="mt-1 text-xs text-slate-500">Dashed line marks the 80% mandate threshold.</p>
-              </div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-600">
-                <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                On-track
-                <span className="ml-1 h-2 w-2 rounded-full bg-rose-500" />
-                Below 80%
-              </div>
-            </div>
-
-            <div className="h-[300px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={sortedRecords} margin={{ top: 12, right: 10, left: -16, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis
-                    dataKey="courseCode"
-                    tick={{ fill: '#334155', fontSize: 12 }}
-                    axisLine={{ stroke: '#cbd5e1' }}
-                    tickLine={{ stroke: '#cbd5e1' }}
-                  />
-                  <YAxis
-                    domain={[0, 100]}
-                    tick={{ fill: '#64748b', fontSize: 12 }}
-                    axisLine={{ stroke: '#cbd5e1' }}
-                    tickLine={{ stroke: '#cbd5e1' }}
-                  />
-                  <Tooltip
-                    formatter={(value) => `${Number(value || 0).toFixed(2)}%`}
-                    labelFormatter={(label) => `Course: ${label}`}
-                    cursor={{ fill: 'rgba(148, 163, 184, 0.14)' }}
-                  />
-                  <ReferenceLine
-                    y={80}
-                    stroke="#dc2626"
-                    strokeDasharray="6 6"
-                    ifOverflow="extendDomain"
-                    label={{ value: '80%', fill: '#dc2626', position: 'insideTopRight', fontSize: 11 }}
-                  />
-                  <Bar dataKey="chartAttendancePercent" radius={[8, 8, 0, 0]}>
-                    {sortedRecords.map((record) => (
-                      <Cell key={`bar-${record.courseCode}`} fill={getChartBarColor(record)} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </article>
         </div>
       ) : null}
 
@@ -421,13 +261,7 @@ export default function AttendanceView() {
               `2 credits = 10 classes`, `3 credits = 15 classes`, `4 credits = 20 classes`
             </div>
             <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              Allowed absences = course credits (80% mandate per course)
-            </div>
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              Penalty after limit = `0.25` grade points per extra absence
-            </div>
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              Course closes when delivered is at least `credits × 5`
+              Allowed misses without waiver = course credits
             </div>
           </div>
         </article>
@@ -651,17 +485,13 @@ export default function AttendanceView() {
                   <CheckCircle2 className="h-4 w-4" />
                   Complete: delivered {insights.totalDelivered}/{insights.classTarget} classes
                 </p>
-              ) : insights.inPenaltyZone ? (
+              ) : insights.requiresAttention ? (
                 <p className="mt-3 text-xs font-semibold text-rose-600">
-                  Penalty active: -{insights.gradePenalty.toFixed(2)} grade points.
-                </p>
-              ) : insights.atAbsenceLimit ? (
-                <p className="mt-3 text-xs font-semibold text-rose-600">
-                  No more absences allowed (0 safe skips).
+                  No waiver-free misses left. Upcoming absences should be supported with proof.
                 </p>
               ) : (
                 <p className="mt-3 text-xs font-semibold text-slate-600">
-                  {insights.safeSkips} safe skips remaining
+                  {insights.remainingAllowedAbsences} waiver-free misses remaining
                 </p>
               )}
 
@@ -671,7 +501,7 @@ export default function AttendanceView() {
                   {insights.creditsInferred ? ' (auto)' : ''}
                 </span>
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
-                  Missed: {insights.currentAbsences}/{insights.allowedAbsences || 'N/A'}
+                  Missed: {insights.totalMissed}/{insights.allowedAbsences || 'N/A'}
                 </span>
                 <span className="rounded-full bg-iim-blue/10 px-3 py-1 text-xs font-semibold text-iim-blue">
                   Completion target: {insights.classTarget || 'N/A'} classes
