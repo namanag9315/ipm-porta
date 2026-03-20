@@ -1038,79 +1038,97 @@ def parse_mess_menu(sheet_data: list[list[Any]], *, batch: Batch | None = None) 
     if not rows:
         return stats
 
-    date_row_index: int | None = None
-    date_col_index: int | None = None
-    day_row_index: int | None = None
-
+    week_blocks: list[dict[str, Any]] = []
     for row_index, row in enumerate(rows):
+        date_col_index: int | None = None
         for col_index, cell in enumerate(row):
             if _normalize_header(cell) == 'date':
-                date_row_index = row_index
                 date_col_index = col_index
                 break
-        if date_row_index is not None:
-            break
+        if date_col_index is None:
+            continue
 
-    if date_row_index is None or date_col_index is None:
+        day_row_index: int | None = None
+        for probe_row_index in range(row_index + 1, len(rows)):
+            probe = _safe_text(_cell_value(rows[probe_row_index], date_col_index)).upper()
+            if probe == 'DAY':
+                day_row_index = probe_row_index
+                break
+
+        if day_row_index is None:
+            continue
+
+        date_row = rows[row_index]
+        parsed_dates = [_parse_date(value) for value in date_row[date_col_index + 1 :]]
+        if not any(parsed_dates):
+            continue
+
+        week_blocks.append(
+            {
+                'date_row_index': row_index,
+                'day_row_index': day_row_index,
+                'date_col_index': date_col_index,
+                'parsed_dates': parsed_dates,
+            }
+        )
+
+    if not week_blocks:
         logger.warning('BLD Menu parsing skipped: DATE row not found.')
         return stats
 
-    for row_index in range(date_row_index + 1, len(rows)):
-        probe = _safe_text(_cell_value(rows[row_index], date_col_index)).upper()
-        if probe == 'DAY':
-            day_row_index = row_index
-            break
-
-    if day_row_index is None:
-        logger.warning('BLD Menu parsing skipped: DAY row not found.')
-        return stats
-
-    date_row = rows[date_row_index]
-    parsed_dates = [_parse_date(value) for value in date_row[date_col_index + 1 :]]
-    parsed_dates = [parsed_date for parsed_date in parsed_dates if parsed_date is not None]
-    if not parsed_dates:
-        logger.warning('BLD Menu parsing skipped: could not parse any menu dates.')
-        return stats
+    week_blocks.sort(key=lambda block: block['date_row_index'])
 
     menu_rows: list[MessMenu] = []
-    current_meal_section = ''
     meal_headers = {'BREAKFAST', 'LUNCH', 'DINNER', 'SNACKS', 'HIGH TEA', 'HI TEA'}
 
-    for row_index in range(day_row_index + 1, len(rows)):
-        row = rows[row_index]
-        category = _safe_text(_cell_value(row, date_col_index))
-        if not category:
-            continue
-
-        normalized_category = category.upper()
-        if normalized_category in meal_headers:
-            current_meal_section = normalized_category.title()
-            continue
-
-        effective_category = (
-            f'{current_meal_section} - {category}' if current_meal_section else category
+    for block_index, block in enumerate(week_blocks):
+        current_meal_section = ''
+        date_col_index = block['date_col_index']
+        parsed_dates = block['parsed_dates']
+        data_start_row = block['day_row_index'] + 1
+        data_end_row = (
+            week_blocks[block_index + 1]['date_row_index']
+            if block_index + 1 < len(week_blocks)
+            else len(rows)
         )
 
-        for column_index, menu_date in enumerate(parsed_dates):
-            try:
-                cell_index = date_col_index + 1 + column_index
-                item_name = _safe_text(_cell_value(row, cell_index))
-                if not menu_date or not item_name:
-                    continue
-                if item_name.lower() in {'nan', 'none'}:
-                    continue
+        for row_index in range(data_start_row, data_end_row):
+            row = rows[row_index]
+            category = _safe_text(_cell_value(row, date_col_index))
+            if not category:
+                continue
 
-                menu_rows.append(
-                    MessMenu(
-                        batch=batch,
-                        date=menu_date,
-                        category=effective_category[:50],
-                        item_name=item_name[:100],
+            normalized_category = category.upper()
+            if normalized_category in {'DATE', 'DAY'}:
+                continue
+            if normalized_category in meal_headers:
+                current_meal_section = normalized_category.title()
+                continue
+
+            effective_category = (
+                f'{current_meal_section} - {category}' if current_meal_section else category
+            )
+
+            for column_index, menu_date in enumerate(parsed_dates):
+                try:
+                    cell_index = date_col_index + 1 + column_index
+                    item_name = _safe_text(_cell_value(row, cell_index))
+                    if not menu_date or not item_name:
+                        continue
+                    if item_name.lower() in {'nan', 'none'}:
+                        continue
+
+                    menu_rows.append(
+                        MessMenu(
+                            batch=batch,
+                            date=menu_date,
+                            category=effective_category[:50],
+                            item_name=item_name[:100],
+                        )
                     )
-                )
-            except Exception:
-                stats['errors'] += 1
-                logger.exception('Error while parsing BLD Menu cell.')
+                except Exception:
+                    stats['errors'] += 1
+                    logger.exception('Error while parsing BLD Menu cell.')
 
     with transaction.atomic():
         menu_scope = MessMenu.objects.filter(batch=batch) if batch else MessMenu.objects.all()
