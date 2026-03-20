@@ -1,5 +1,7 @@
 import { motion } from 'framer-motion'
 import {
+  AlertTriangle,
+  BarChart3,
   CheckCircle2,
   Clock3,
   ExternalLink,
@@ -8,10 +10,21 @@ import {
   UploadCloud,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 import { useAuth } from '../hooks/useAuth'
 import api from '../lib/api'
-import { getAttendanceInsights } from '../lib/attendance'
+import { calculateAttendanceCourseMetrics, getAttendanceInsights } from '../lib/attendance'
 import { cn } from '../lib/cn'
 
 const ATTENDANCE_MASTER_SHEET_URL =
@@ -26,6 +39,57 @@ const COURSE_COLOR_CLASSES = [
   'border-l-cyan-500',
   'border-l-fuchsia-500',
   'border-l-orange-500',
+]
+
+const COURSE_ANALYTICS_THEMES = [
+  {
+    bar: '#2563eb',
+    softBg: 'bg-blue-50',
+    softBorder: 'border-blue-200',
+    softText: 'text-blue-700',
+  },
+  {
+    bar: '#16a34a',
+    softBg: 'bg-emerald-50',
+    softBorder: 'border-emerald-200',
+    softText: 'text-emerald-700',
+  },
+  {
+    bar: '#9333ea',
+    softBg: 'bg-violet-50',
+    softBorder: 'border-violet-200',
+    softText: 'text-violet-700',
+  },
+  {
+    bar: '#ea580c',
+    softBg: 'bg-orange-50',
+    softBorder: 'border-orange-200',
+    softText: 'text-orange-700',
+  },
+  {
+    bar: '#0284c7',
+    softBg: 'bg-sky-50',
+    softBorder: 'border-sky-200',
+    softText: 'text-sky-700',
+  },
+  {
+    bar: '#db2777',
+    softBg: 'bg-pink-50',
+    softBorder: 'border-pink-200',
+    softText: 'text-pink-700',
+  },
+  {
+    bar: '#4f46e5',
+    softBg: 'bg-indigo-50',
+    softBorder: 'border-indigo-200',
+    softText: 'text-indigo-700',
+  },
+  {
+    bar: '#0f766e',
+    softBg: 'bg-teal-50',
+    softBorder: 'border-teal-200',
+    softText: 'text-teal-700',
+  },
 ]
 
 function percentageTone(percentage) {
@@ -61,6 +125,36 @@ function courseColorClass(courseCode) {
   const normalized = String(courseCode || 'NA')
   const hash = normalized.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)
   return COURSE_COLOR_CLASSES[hash % COURSE_COLOR_CLASSES.length]
+}
+
+function courseAnalyticsTheme(courseCode) {
+  const normalized = String(courseCode || 'NA')
+  const hash = normalized.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)
+  return COURSE_ANALYTICS_THEMES[hash % COURSE_ANALYTICS_THEMES.length]
+}
+
+function attendanceStatusText(metrics) {
+  if (metrics.isCompleted) {
+    if (metrics.gradePenalty > 0) {
+      return `Completed with penalty (-${metrics.gradePenalty.toFixed(2)} grade points)`
+    }
+    return 'Completed safely within attendance mandate'
+  }
+  if (metrics.gradePenalty > 0) {
+    return `Penalty active: -${metrics.gradePenalty.toFixed(2)} grade points`
+  }
+  if (metrics.safeSkips === 0) {
+    return 'At limit: no more absences allowed'
+  }
+  return `Safe to miss ${metrics.safeSkips} more classes`
+}
+
+function formatPercent(value) {
+  const normalized = Number(value || 0)
+  if (!Number.isFinite(normalized)) {
+    return '0.0%'
+  }
+  return `${normalized.toFixed(1)}%`
 }
 
 function formatSubmittedAt(value) {
@@ -140,11 +234,14 @@ export default function AttendanceView() {
     return records
       .map((record) => {
         const insights = getAttendanceInsights(record)
+        const metrics = calculateAttendanceCourseMetrics(record)
         return {
           ...record,
           courseName: normalizeCourseDisplayName(record?.course?.name || record?.course?.code),
           courseCode: record?.course?.code || 'N/A',
           insights,
+          metrics,
+          theme: courseAnalyticsTheme(record?.course?.code || 'N/A'),
         }
       })
       .sort((left, right) => {
@@ -157,6 +254,28 @@ export default function AttendanceView() {
         return left.courseCode.localeCompare(right.courseCode)
       })
   }, [records])
+
+  const analyticsSummary = useMemo(() => {
+    const totalCourses = sortedRecords.length
+    const completedCourses = sortedRecords.filter((record) => record.metrics.isCompleted).length
+    const penaltyCourses = sortedRecords.filter((record) => record.metrics.gradePenalty > 0).length
+    const atRiskCourses = sortedRecords.filter(
+      (record) => !record.metrics.isCompleted && record.metrics.safeSkips === 0,
+    ).length
+
+    const avgAttendance =
+      totalCourses > 0
+        ? sortedRecords.reduce((sum, record) => sum + record.metrics.attendancePercentage, 0) / totalCourses
+        : 0
+
+    return {
+      totalCourses,
+      completedCourses,
+      penaltyCourses,
+      atRiskCourses,
+      avgAttendance,
+    }
+  }, [sortedRecords])
 
   useEffect(() => {
     if (!waiverForm.courseCode && sortedRecords.length > 0) {
@@ -237,6 +356,139 @@ export default function AttendanceView() {
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           {error}
         </div>
+      ) : null}
+
+      {!loading && sortedRecords.length > 0 ? (
+        <section className="grid gap-4 xl:grid-cols-[1.45fr_1fr]">
+          <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="heading-tight text-lg font-semibold text-slate-900">Attendance Analytics</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Per-course 80% mandate tracking with completion and penalty logic.
+                </p>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
+                <BarChart3 className="h-4 w-4 text-slate-500" />
+                Live per-course view
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-xs font-medium text-slate-500">Active / Total</p>
+                <p className="mt-1 text-xl font-semibold text-slate-900">{analyticsSummary.totalCourses}</p>
+                <p className="mt-1 text-[11px] text-slate-500">{analyticsSummary.atRiskCourses} currently at limit</p>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <p className="text-xs font-medium text-emerald-700">Completed</p>
+                <p className="mt-1 text-xl font-semibold text-emerald-800">{analyticsSummary.completedCourses}</p>
+              </div>
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+                <p className="text-xs font-medium text-rose-700">Penalty Active</p>
+                <p className="mt-1 text-xl font-semibold text-rose-800">{analyticsSummary.penaltyCourses}</p>
+              </div>
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+                <p className="text-xs font-medium text-blue-700">Avg Attendance</p>
+                <p className="mt-1 text-xl font-semibold text-blue-800">{formatPercent(analyticsSummary.avgAttendance)}</p>
+              </div>
+            </div>
+
+            <div className="mt-5 h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={sortedRecords.map((record) => ({
+                    code: record.courseCode,
+                    name: record.courseName,
+                    attendance: Number(record.metrics.attendancePercentage.toFixed(2)),
+                    color: record.theme.bar,
+                  }))}
+                  margin={{ top: 10, right: 8, left: -24, bottom: 0 }}
+                >
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="code"
+                    tick={{ fill: '#475569', fontSize: 12 }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                    tickLine={{ stroke: '#cbd5e1' }}
+                  />
+                  <YAxis
+                    domain={[0, 100]}
+                    tick={{ fill: '#64748b', fontSize: 12 }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                    tickLine={{ stroke: '#cbd5e1' }}
+                  />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(148, 163, 184, 0.12)' }}
+                    formatter={(value) => `${Number(value || 0).toFixed(2)}%`}
+                    labelFormatter={(label, payload) => {
+                      const course = payload?.[0]?.payload
+                      return `${label} • ${course?.name || ''}`
+                    }}
+                  />
+                  <ReferenceLine
+                    y={80}
+                    stroke="#dc2626"
+                    strokeDasharray="6 6"
+                    label={{ value: '80%', fill: '#dc2626', position: 'insideTopRight', fontSize: 11 }}
+                  />
+                  <Bar dataKey="attendance" radius={[8, 8, 0, 0]}>
+                    {sortedRecords.map((record, index) => (
+                      <Cell key={`bar-${record.courseCode}-${index}`} fill={record.theme.bar} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </article>
+
+          <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="heading-tight text-lg font-semibold text-slate-900">Course Status Radar</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Each course keeps its own color for quick scanning across the dashboard.
+            </p>
+
+            <div className="mt-4 space-y-2.5">
+              {sortedRecords.map((record) => (
+                <div
+                  key={`status-${record.courseCode}`}
+                  className={cn(
+                    'rounded-xl border px-3.5 py-3',
+                    record.theme.softBg,
+                    record.theme.softBorder,
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className={cn('text-xs font-semibold uppercase tracking-[0.14em]', record.theme.softText)}>
+                        {record.courseCode}
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-900">{record.courseName}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className={cn('text-sm font-semibold', record.theme.softText)}>
+                        {formatPercent(record.metrics.attendancePercentage)}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {record.metrics.attended}/{record.metrics.delivered}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+                    <p className="font-medium text-slate-700">{attendanceStatusText(record.metrics)}</p>
+                    {record.metrics.gradePenalty > 0 ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 font-semibold text-rose-700">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        -{record.metrics.gradePenalty.toFixed(2)}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </article>
+        </section>
       ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
