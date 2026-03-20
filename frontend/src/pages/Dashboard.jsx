@@ -30,7 +30,8 @@ const COURSE_COLOR_CLASSES = [
   'bg-fuchsia-500',
   'bg-orange-500',
 ]
-const DASHBOARD_CARD_CLASS = 'rounded-2xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]'
+const DASHBOARD_CARD_CLASS =
+  'rounded-2xl border border-slate-100 bg-white p-6 shadow-[0_4px_24px_rgb(0,0,0,0.04)]'
 const DASHBOARD_CARD_TITLE_CLASS = 'text-lg font-bold text-slate-800'
 const DASHBOARD_CARD_SUBTEXT_CLASS = 'text-sm text-slate-500'
 
@@ -552,12 +553,12 @@ export default function Dashboard() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-3 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-6 rounded-2xl bg-slate-50 md:grid-cols-3 lg:grid-cols-4">
         <motion.section
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35 }}
-          className="relative col-span-1 overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-[#1E3A8A] to-[#2B4EA2] p-6 text-white shadow-[0_8px_30px_rgb(0,0,0,0.08)] md:col-span-3 lg:col-span-4"
+          className="relative col-span-1 overflow-hidden rounded-2xl border border-slate-100 bg-gradient-to-br from-slate-900 via-[#1E3A8A] to-[#2B4EA2] p-6 text-white shadow-[0_4px_24px_rgb(0,0,0,0.04)] md:col-span-3 lg:col-span-4"
         >
           <div className="absolute -right-8 -top-10 h-44 w-44 rounded-full bg-cyan-200/20 blur-2xl" />
           <div className="absolute -bottom-16 left-0 h-44 w-44 rounded-full bg-blue-200/20 blur-3xl" />
@@ -621,7 +622,7 @@ export default function Dashboard() {
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.08 }}
-          className={cn(DASHBOARD_CARD_CLASS, 'lg:col-span-2')}
+          className={cn(DASHBOARD_CARD_CLASS, 'h-full flex flex-col lg:col-span-2')}
         >
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className={DASHBOARD_CARD_TITLE_CLASS}>Attendance by Course</h3>
@@ -637,51 +638,53 @@ export default function Dashboard() {
             </div>
           ) : null}
 
-          {courseAttendanceRows.length === 0 ? (
-            <p className="mt-6 text-sm text-slate-500">Attendance percentages are not available yet.</p>
-          ) : (
-            <div className="mt-4 max-h-52 space-y-3 overflow-y-auto pr-1">
-              {courseAttendanceRows.map((item) => (
-                <div key={item.code} className="rounded-xl bg-slate-50/80 p-3">
-                  <div className="mb-1 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className={cn('h-2.5 w-2.5 rounded-full', courseColorClass(item.code))} />
-                      <p className="text-sm font-semibold text-slate-800">{item.code}</p>
+          <div className="mt-4 flex-1">
+            {courseAttendanceRows.length === 0 ? (
+              <p className="text-sm text-slate-500">Attendance percentages are not available yet.</p>
+            ) : (
+              <div className="max-h-52 space-y-3 overflow-y-auto pr-1">
+                {courseAttendanceRows.map((item) => (
+                  <div key={item.code} className="rounded-xl bg-slate-50/80 p-3">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className={cn('h-2.5 w-2.5 rounded-full', courseColorClass(item.code))} />
+                        <p className="text-sm font-semibold text-slate-800">{item.code}</p>
+                      </div>
+                      <p className="text-xs font-medium text-slate-600">{item.percentage.toFixed(2)}%</p>
                     </div>
-                    <p className="text-xs font-medium text-slate-600">{item.percentage.toFixed(2)}%</p>
+                    <div className="h-2 rounded-full bg-slate-100">
+                      <div
+                        className={cn(
+                          'h-2 rounded-full',
+                          item.percentage >= 85
+                            ? 'bg-emerald-500'
+                            : item.percentage >= 75
+                              ? 'bg-amber-500'
+                              : 'bg-rose-500',
+                        )}
+                        style={{ width: `${Math.max(0, Math.min(100, item.percentage))}%` }}
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">{item.name}</p>
+                    {item.percentage < 75 ? (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-600">
+                        Important: Attend upcoming classes
+                      </p>
+                    ) : null}
                   </div>
-                  <div className="h-2 rounded-full bg-slate-100">
-                    <div
-                      className={cn(
-                        'h-2 rounded-full',
-                        item.percentage >= 85
-                          ? 'bg-emerald-500'
-                          : item.percentage >= 75
-                            ? 'bg-amber-500'
-                            : 'bg-rose-500',
-                      )}
-                      style={{ width: `${Math.max(0, Math.min(100, item.percentage))}%` }}
-                    />
-                  </div>
-                  <p className="mt-1 text-xs text-slate-500">{item.name}</p>
-                  {item.percentage < 75 ? (
-                    <p className="mt-1 text-[11px] font-semibold text-rose-600">
-                      Important: Attend upcoming classes
-                    </p>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </div>
         </motion.section>
 
         <motion.section
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.44, delay: 0.15 }}
-          className={cn(DASHBOARD_CARD_CLASS, 'group lg:col-span-1')}
+          className={cn(DASHBOARD_CARD_CLASS, 'group h-full flex flex-col lg:col-span-1')}
         >
-          <Link to="/dashboard/mess-menu" className="flex h-full flex-col justify-between">
+          <Link to="/dashboard/mess-menu" className="flex h-full flex-1 flex-col justify-between">
             <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 text-iim-gold transition group-hover:scale-105 group-hover:bg-amber-100">
               <UtensilsCrossed className="h-6 w-6" />
             </div>
@@ -721,7 +724,7 @@ export default function Dashboard() {
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.46, delay: 0.18 }}
-          className={cn(DASHBOARD_CARD_CLASS, 'lg:col-span-1')}
+          className={cn(DASHBOARD_CARD_CLASS, 'h-full flex flex-col lg:col-span-1')}
         >
           <div className="mb-3 flex items-center gap-2">
             <ClipboardCheck className="h-5 w-5 text-iim-blue" />
@@ -729,47 +732,49 @@ export default function Dashboard() {
           </div>
           <p className={cn(DASHBOARD_CARD_SUBTEXT_CLASS, 'mb-3')}>Deadlines and quick details.</p>
 
-          {assignmentRows.length === 0 ? (
-            <p className="text-sm text-slate-500">No upcoming assignments right now.</p>
-          ) : (
-            <div className="max-h-56 space-y-3 overflow-y-auto pr-1">
-              {assignmentRows.map((assignment) => (
-                <article key={assignment.id} className={cn('rounded-xl p-3', assignment.deadline.classes)}>
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">{assignment.title}</p>
-                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                      {assignment.course?.code || 'N/A'}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-xs font-medium text-slate-700">
-                    Due {formatDateLabel(`${assignment.due_date}T00:00:00`)} • {assignment.deadline.text}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setExpandedAssignments((current) => ({
-                        ...current,
-                        [assignment.id]: !current[assignment.id],
-                      }))
-                    }
-                    className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-iim-blue"
-                  >
-                    Details
-                    {expandedAssignments[assignment.id] ? (
-                      <ChevronUp className="h-3.5 w-3.5" />
-                    ) : (
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                  {expandedAssignments[assignment.id] ? (
-                    <p className="mt-2 rounded-xl bg-white/80 px-2.5 py-2 text-xs text-slate-700">
-                      {assignment.description || 'No additional details provided.'}
+          <div className="flex-1">
+            {assignmentRows.length === 0 ? (
+              <p className="text-sm text-slate-500">No upcoming assignments right now.</p>
+            ) : (
+              <div className="max-h-56 space-y-3 overflow-y-auto pr-1">
+                {assignmentRows.map((assignment) => (
+                  <article key={assignment.id} className={cn('rounded-xl p-3', assignment.deadline.classes)}>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-900">{assignment.title}</p>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                        {assignment.course?.code || 'N/A'}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs font-medium text-slate-700">
+                      Due {formatDateLabel(`${assignment.due_date}T00:00:00`)} • {assignment.deadline.text}
                     </p>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedAssignments((current) => ({
+                          ...current,
+                          [assignment.id]: !current[assignment.id],
+                        }))
+                      }
+                      className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-iim-blue"
+                    >
+                      Details
+                      {expandedAssignments[assignment.id] ? (
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                    {expandedAssignments[assignment.id] ? (
+                      <p className="mt-2 rounded-xl bg-white/80 px-2.5 py-2 text-xs text-slate-700">
+                        {assignment.description || 'No additional details provided.'}
+                      </p>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
         </motion.section>
 
         <motion.section
@@ -855,7 +860,7 @@ export default function Dashboard() {
               initial={{ opacity: 0, y: 18 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.24 }}
-              className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-sky-100 via-cyan-100 to-emerald-100 p-6 text-slate-900 shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
+              className={cn(DASHBOARD_CARD_CLASS, 'relative overflow-hidden')}
             >
               <div className="absolute -right-10 -top-8 h-28 w-28 rounded-full bg-white/50 blur-2xl" />
               <div className="relative">
@@ -895,7 +900,7 @@ export default function Dashboard() {
           {Array.from({ length: 3 }).map((_, index) => (
             <div
               key={index}
-              className="h-28 animate-pulse rounded-2xl bg-white shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
+              className="h-28 animate-pulse rounded-2xl border border-slate-100 bg-white shadow-[0_4px_24px_rgb(0,0,0,0.04)]"
             />
           ))}
         </div>
