@@ -1,4 +1,5 @@
 import {
+  ExternalLink,
   LogOut,
   Menu,
   X,
@@ -11,10 +12,15 @@ import { useAuth } from '../hooks/useAuth'
 import FinanceNotificationBell from '../components/finance/FinanceNotificationBell'
 import Sidebar from '../components/layout/Sidebar'
 
+const TIMETABLE_MASTER_SHEET_URL =
+  import.meta.env.VITE_TIMETABLE_MASTER_SHEET_URL ||
+  'https://docs.google.com/spreadsheets/d/1dnzXBXlF4-OpVblhj4DJM6kJ5l-FEACjWwun7ntTGXk/edit'
+
 export default function DashboardLayout() {
   const location = useLocation()
   const { user, logout } = useAuth()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const isTimetableRoute = location.pathname === '/dashboard/timetable'
 
   useEffect(() => {
     setMobileMenuOpen(false)
@@ -126,6 +132,17 @@ export default function DashboardLayout() {
 
               <div className="flex items-center gap-3">
                 <FinanceNotificationBell />
+                {isTimetableRoute ? (
+                  <a
+                    href={TIMETABLE_MASTER_SHEET_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-[8px] bg-white px-[12px] py-[7px] text-[12px] font-medium text-slate-700 [font-family:'DM Sans',sans-serif] [border:0.5px_solid_rgba(0,0,0,0.12)] transition hover:bg-slate-50"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Open Master Sheet
+                  </a>
+                ) : null}
 
                 <div className="inline-flex items-center gap-3 rounded-full border border-white/70 bg-white/70 px-3 py-2 shadow-sm">
                   <div className="flex h-9 w-9 items-center justify-center rounded-full bg-iim-blue text-sm font-semibold text-white">
