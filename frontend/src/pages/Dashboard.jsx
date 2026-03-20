@@ -293,6 +293,9 @@ export default function Dashboard() {
             timeoutMs: DASHBOARD_PRIMARY_TIMEOUT_MS,
           }),
         ])
+        if (controller.signal.aborted) {
+          return
+        }
 
         const attendanceRes = attendanceResult.status === 'fulfilled' ? attendanceResult.value : null
         const timetableRes = timetableResult.status === 'fulfilled' ? timetableResult.value : null
@@ -344,6 +347,9 @@ export default function Dashboard() {
             }),
           ),
         ])
+        if (controller.signal.aborted) {
+          return
+        }
 
         const extrasRes = secondaryResults[0]?.status === 'fulfilled' ? secondaryResults[0].value : null
         const pollsRes = secondaryResults[1]?.status === 'fulfilled' ? secondaryResults[1].value : null
@@ -385,10 +391,11 @@ export default function Dashboard() {
       } catch (fetchError) {
         if (fetchError.name !== 'CanceledError') {
           setError('Unable to load dashboard data right now.')
-          setLoading(false)
         }
       } finally {
-        setLoading(false)
+        if (!controller.signal.aborted) {
+          setLoading(false)
+        }
       }
     }
 
