@@ -1,6 +1,5 @@
 import { motion } from 'framer-motion'
 import {
-  AlertTriangle,
   BarChart3,
   CheckCircle2,
   Clock3,
@@ -131,22 +130,6 @@ function courseAnalyticsTheme(courseCode) {
   const normalized = String(courseCode || 'NA')
   const hash = normalized.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)
   return COURSE_ANALYTICS_THEMES[hash % COURSE_ANALYTICS_THEMES.length]
-}
-
-function attendanceStatusText(metrics) {
-  if (metrics.isCompleted) {
-    if (metrics.gradePenalty > 0) {
-      return `Completed with penalty (-${metrics.gradePenalty.toFixed(2)} grade points)`
-    }
-    return 'Completed safely within attendance mandate'
-  }
-  if (metrics.gradePenalty > 0) {
-    return `Penalty active: -${metrics.gradePenalty.toFixed(2)} grade points`
-  }
-  if (metrics.safeSkips === 0) {
-    return 'At limit: no more absences allowed'
-  }
-  return `Safe to miss ${metrics.safeSkips} more classes`
 }
 
 function formatPercent(value) {
@@ -359,7 +342,7 @@ export default function AttendanceView() {
       ) : null}
 
       {!loading && sortedRecords.length > 0 ? (
-        <section className="grid gap-4 xl:grid-cols-[1.45fr_1fr]">
+        <section>
           <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -439,53 +422,6 @@ export default function AttendanceView() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            </div>
-          </article>
-
-          <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="heading-tight text-lg font-semibold text-slate-900">Course Status Radar</h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Each course keeps its own color for quick scanning across the dashboard.
-            </p>
-
-            <div className="mt-4 space-y-2.5">
-              {sortedRecords.map((record) => (
-                <div
-                  key={`status-${record.courseCode}`}
-                  className={cn(
-                    'rounded-xl border px-3.5 py-3',
-                    record.theme.softBg,
-                    record.theme.softBorder,
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className={cn('text-xs font-semibold uppercase tracking-[0.14em]', record.theme.softText)}>
-                        {record.courseCode}
-                      </p>
-                      <p className="mt-1 text-sm font-semibold text-slate-900">{record.courseName}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className={cn('text-sm font-semibold', record.theme.softText)}>
-                        {formatPercent(record.metrics.attendancePercentage)}
-                      </p>
-                      <p className="text-[11px] text-slate-500">
-                        {record.metrics.attended}/{record.metrics.delivered}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex items-center justify-between gap-2 text-xs">
-                    <p className="font-medium text-slate-700">{attendanceStatusText(record.metrics)}</p>
-                    {record.metrics.gradePenalty > 0 ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 font-semibold text-rose-700">
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        -{record.metrics.gradePenalty.toFixed(2)}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
             </div>
           </article>
         </section>
@@ -684,7 +620,9 @@ export default function AttendanceView() {
               transition={{ duration: 0.25, delay: Math.min(index * 0.03, 0.25) }}
               className={cn(
                 'rounded-2xl border border-slate-200/80 border-l-4 bg-white p-5 shadow-soft transition duration-200 hover:-translate-y-1 hover:shadow-lg',
-                insights.courseCompleted
+                insights.gradePenalty > 0
+                  ? 'border-rose-300 border-l-rose-500 bg-rose-50/50'
+                  : insights.courseCompleted
                   ? 'border-emerald-300 border-l-emerald-500 bg-emerald-50/40'
                   : courseColorClass(record.courseCode),
               )}
@@ -724,7 +662,14 @@ export default function AttendanceView() {
                 </div>
                 <div className="h-2 rounded-full bg-slate-100">
                   <div
-                    className={cn('h-2 rounded-full', insights.courseCompleted ? 'bg-emerald-500' : 'bg-iim-blue')}
+                    className={cn(
+                      'h-2 rounded-full',
+                      insights.gradePenalty > 0
+                        ? 'bg-rose-500'
+                        : insights.courseCompleted
+                        ? 'bg-emerald-500'
+                        : 'bg-iim-blue',
+                    )}
                     style={{
                       width: `${Math.max(0, Math.min(100, attendancePercent))}%`,
                     }}
@@ -736,6 +681,10 @@ export default function AttendanceView() {
                 <p className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
                   <CheckCircle2 className="h-4 w-4" />
                   Complete: delivered {insights.totalDelivered}/{insights.classTarget} classes
+                </p>
+              ) : insights.gradePenalty > 0 ? (
+                <p className="mt-3 text-xs font-semibold text-rose-700">
+                  Penalty active: -{Number(insights.gradePenalty || 0).toFixed(2)} grade points.
                 </p>
               ) : insights.requiresAttention ? (
                 <p className="mt-3 text-xs font-semibold text-rose-600">
