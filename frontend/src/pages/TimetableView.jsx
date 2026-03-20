@@ -82,7 +82,7 @@ function getDurationMinutes(startAt, endAt) {
 }
 
 const BADGE_BASE_CLASS =
-  "inline-flex items-center rounded-[5px] px-[7px] py-[2px] text-[9.5px] font-semibold uppercase tracking-[0.8px] [font-family:'DM Sans',sans-serif]"
+  'inline-flex items-center rounded-[5px] px-[7px] py-[2px] text-[9.5px] font-semibold uppercase tracking-[0.8px]'
 
 export default function TimetableView() {
   const { user } = useAuth()
@@ -257,14 +257,14 @@ export default function TimetableView() {
   }
 
   return (
-    <section className="space-y-5 rounded-2xl bg-[#f5f4f1] p-4 sm:p-5">
+    <section className="space-y-5 rounded-2xl bg-white p-4 sm:p-5">
       <div className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-[22px] font-extrabold tracking-[-0.6px] text-[#0f1e3d] [font-family:'Syne',sans-serif]">
+            <h2 className="text-[22px] font-extrabold tracking-[-0.6px] text-[#0f1e3d]">
               Timetable
             </h2>
-            <p className="mt-1 text-[12px] text-[#aaa] [font-family:'DM Sans',sans-serif]">
+            <p className="mt-1 text-[12px] text-[#aaa]">
               Interactive week planner
             </p>
           </div>
@@ -279,7 +279,7 @@ export default function TimetableView() {
             >
               ←
             </button>
-            <span className="text-[12px] text-slate-700 [font-family:'DM Mono',monospace]">
+            <span className="text-[12px] text-slate-700">
               {selectedBucket?.label || 'No weeks available'}
             </span>
             <button
@@ -313,10 +313,10 @@ export default function TimetableView() {
                       : 'text-[#ccc] hover:bg-transparent',
                   )}
                 >
-                  <p className="text-[10px] uppercase tracking-[1px] [font-family:'DM Sans',sans-serif]">
+                  <p className="text-[10px] uppercase tracking-[1px]">
                     {day.day}
                   </p>
-                  <p className="mt-0.5 text-[17px] font-bold [font-family:'Syne',sans-serif]">{day.dayNumber}</p>
+                  <p className="mt-0.5 text-[17px] font-bold">{day.dayNumber}</p>
 
                   <div className="mt-1.5 flex items-center justify-center gap-1">
                     {Array.from({ length: Math.min(3, day.classCount) }).map((_, index) => (
@@ -359,17 +359,17 @@ export default function TimetableView() {
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22 }}
-          className="rounded-[12px] bg-[#f5f4f1]"
+          className="rounded-[12px] bg-white"
         >
           <div className="mb-4 flex items-center gap-2">
             <CalendarClock className="h-4 w-4 text-[#7a8bb8]" />
-            <h3 className="text-[13px] font-medium text-slate-600 [font-family:'DM Sans',sans-serif]">
+            <h3 className="text-[13px] font-medium text-slate-600">
               {selectedDay ? formatDayTitle(`${selectedDay}T00:00:00`) : 'Select a day'}
             </h3>
           </div>
 
           {selectedDaySessions.length === 0 ? (
-            <div className="rounded-[12px] bg-white p-6 text-sm text-slate-500 shadow-[0_4px_24px_rgb(0,0,0,0.04)] [font-family:'DM Sans',sans-serif]">
+            <div className="rounded-[12px] bg-white p-6 text-sm text-slate-500 shadow-[0_4px_24px_rgb(0,0,0,0.04)]">
               No classes scheduled for this day.
             </div>
           ) : (
@@ -388,7 +388,7 @@ export default function TimetableView() {
                     className={cn('flex gap-3', state.isPast && 'opacity-60')}
                   >
                     <div className="relative w-[42px] shrink-0 pt-1">
-                      <p className="text-[10px] text-[#aaa] [font-family:'DM Mono',monospace]">
+                      <p className="text-[10px] text-[#aaa]">
                         {formatTimeLabel(state.startAt)}
                       </p>
                       <span
@@ -428,21 +428,21 @@ export default function TimetableView() {
                             )}
                           </div>
 
-                          <p className="text-[13.5px] font-bold text-[#0f1e3d] [font-family:'Syne',sans-serif]">
+                          <p className="text-[13.5px] font-bold text-[#0f1e3d]">
                             {getSessionTitle(session)}
                           </p>
 
-                          <p className="mt-2 inline-flex items-center gap-1 text-[11px] text-slate-500 [font-family:'DM Sans',sans-serif]">
+                          <p className="mt-2 inline-flex items-center gap-1 text-[11px] text-slate-500">
                             <MapPin className="h-[11px] w-[11px] text-[#bbb]" />
                             {session.room || 'Room not specified'}
                           </p>
                         </div>
 
                         <div className="shrink-0 text-right">
-                          <p className="text-[11px] text-[#888] [font-family:'DM Mono',monospace]">
+                          <p className="text-[11px] text-[#888]">
                             {formatTimeLabel(state.startAt)} - {formatTimeLabel(state.endAt)}
                           </p>
-                          <p className="mt-1 text-[10px] text-[#bbb] [font-family:'DM Mono',monospace]">
+                          <p className="mt-1 text-[10px] text-[#bbb]">
                             {durationMinutes > 0 ? `${durationMinutes} min` : '--'}
                           </p>
                         </div>
@@ -457,7 +457,7 @@ export default function TimetableView() {
       )}
 
       {!loading && weekBuckets.length === 0 ? (
-        <div className="rounded-[12px] bg-white p-6 text-sm text-slate-500 shadow-[0_4px_24px_rgb(0,0,0,0.04)] [font-family:'DM Sans',sans-serif]">
+        <div className="rounded-[12px] bg-white p-6 text-sm text-slate-500 shadow-[0_4px_24px_rgb(0,0,0,0.04)]">
           No timetable sessions found yet.
         </div>
       ) : null}

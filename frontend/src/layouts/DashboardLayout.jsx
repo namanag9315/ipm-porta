@@ -137,7 +137,7 @@ export default function DashboardLayout() {
                     href={TIMETABLE_MASTER_SHEET_URL}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-[8px] bg-white px-[12px] py-[7px] text-[12px] font-medium text-slate-700 [font-family:'DM Sans',sans-serif] [border:0.5px_solid_rgba(0,0,0,0.12)] transition hover:bg-slate-50"
+                    className="inline-flex items-center gap-1.5 rounded-[8px] bg-white px-[12px] py-[7px] text-[12px] font-medium text-slate-700 [border:0.5px_solid_rgba(0,0,0,0.12)] transition hover:bg-slate-50"
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
                     Open Master Sheet
