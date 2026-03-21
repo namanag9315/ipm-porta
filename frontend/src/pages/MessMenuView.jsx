@@ -106,20 +106,18 @@ export default function MessMenuView() {
 
         const hasAnyItems = Object.values(nextMap).some((items) => Array.isArray(items) && items.length > 0)
         if (!hasAnyItems) {
-          const fallbackProbe = await api.get(
-            `/api/v1/mess-menu/?date=${todayIso}&template_fallback=1`,
-            { signal: controller.signal },
+          const fallbackResponses = await Promise.all(
+            weekDays.map((day) =>
+              api.get(`/api/v1/mess-menu/?date=${day.iso}&template_fallback=1`, {
+                signal: controller.signal,
+              }),
+            ),
           )
-          const sourceDate = fallbackProbe?.data?.[0]?.source_date
-          if (
-            sourceDate &&
-            !weekDays.some((day) => day.iso === sourceDate) &&
-            sourceDate !== weekAnchorIso
-          ) {
-            setWeekAnchorIso(sourceDate)
-            setActiveDate(sourceDate)
-            return
-          }
+          weekDays.forEach((day, index) => {
+            nextMap[day.iso] = Array.isArray(fallbackResponses[index].data)
+              ? fallbackResponses[index].data
+              : []
+          })
         }
 
         setMenuMap(nextMap)
