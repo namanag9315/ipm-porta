@@ -205,15 +205,15 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULE = {
-    'sync-google-sheets-every-12-hours': {
+    'sync-google-sheets-hourly': {
         'task': 'academic_core.sync_google_sheets_data',
-        'schedule': crontab(minute=0, hour='*/12'),  # every 12 hours
+        'schedule': crontab(minute=0),  # every hour
     },
 }
 AUTO_SYNC_FALLBACK_ENABLED = (
     os.getenv('AUTO_SYNC_FALLBACK_ENABLED', 'False').lower() in {'true', '1', 'yes'}
 )
-AUTO_SYNC_FALLBACK_INTERVAL_SECONDS = _int_env('AUTO_SYNC_FALLBACK_INTERVAL_SECONDS', 43200)
+AUTO_SYNC_FALLBACK_INTERVAL_SECONDS = _int_env('AUTO_SYNC_FALLBACK_INTERVAL_SECONDS', 3600)
 AUTO_SYNC_FALLBACK_INITIAL_DELAY_SECONDS = _int_env('AUTO_SYNC_FALLBACK_INITIAL_DELAY_SECONDS', 45)
 ATTENDANCE_CLEANUP_ENABLED = (
     os.getenv('ATTENDANCE_CLEANUP_ENABLED', 'False').lower() in {'true', '1', 'yes'}

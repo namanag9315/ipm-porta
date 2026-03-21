@@ -37,11 +37,7 @@ services:
       - key: ONLY_BATCH_CODE
         sync: false
       - key: AUTO_SYNC_FALLBACK_ENABLED
-        value: "True"
-      - key: AUTO_SYNC_FALLBACK_INTERVAL_SECONDS
-        value: "43200"
-      - key: AUTO_SYNC_FALLBACK_INITIAL_DELAY_SECONDS
-        value: "120"
+        value: "False"
       - key: ATTENDANCE_CLEANUP_ENABLED
         sync: false
       - key: DATABASE_URL
