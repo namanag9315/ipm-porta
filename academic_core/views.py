@@ -18,6 +18,7 @@ from django.db.models import Max, Prefetch, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
+from django.views.decorators.cache import cache_page
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, parser_classes
@@ -1129,6 +1130,7 @@ def finance_notifications(request) -> Response:
     return Response({'count': count}, status=status.HTTP_200_OK)
 
 
+@cache_page(60 * 15)
 @api_view(['GET'])
 def get_student_attendance(request, roll_number: str) -> Response:
     student = get_object_or_404(Student, roll_number=roll_number)
@@ -1356,6 +1358,7 @@ def admin_run_sync(request) -> Response:
         )
 
 
+@cache_page(60 * 15)
 @api_view(['GET'])
 def get_student_timetable(request, roll_number: str) -> Response:
     student = get_object_or_404(Student, roll_number=roll_number)

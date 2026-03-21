@@ -219,6 +219,28 @@ ATTENDANCE_CLEANUP_ENABLED = (
     os.getenv('ATTENDANCE_CLEANUP_ENABLED', 'False').lower() in {'true', '1', 'yes'}
 )
 
+REDIS_CACHE_URL = (os.environ.get('REDIS_URL') or os.environ.get('redis_url') or '').strip()
+if REDIS_CACHE_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_CACHE_URL,
+            'TIMEOUT': 60 * 15,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'CONNECTION_POOL_KWARGS': {
+                    'ssl_cert_reqs': None,
+                },
+            },
+        },
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
+        },
+    }
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [],
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
