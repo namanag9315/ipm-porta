@@ -228,8 +228,13 @@ if REDIS_CACHE_URL:
             'TIMEOUT': 60 * 15,
             'OPTIONS': {
                 'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                # Fail open: API should still work even if Redis has a network/TLS issue.
+                'IGNORE_EXCEPTIONS': True,
+                'SOCKET_CONNECT_TIMEOUT': 2,
+                'SOCKET_TIMEOUT': 2,
                 'CONNECTION_POOL_KWARGS': {
-                    'ssl_cert_reqs': None,
+                    'ssl_cert_reqs': 'none',
+                    'ssl_check_hostname': False,
                 },
             },
         },
