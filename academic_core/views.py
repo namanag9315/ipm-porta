@@ -19,6 +19,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
 from django.views.decorators.cache import cache_page
+from django.views.decorators.vary import vary_on_headers
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, parser_classes
@@ -1382,6 +1383,8 @@ def get_student_timetable(request, roll_number: str) -> Response:
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+@cache_page(60 * 15)
+@vary_on_headers('X-Batch-Code')
 @api_view(['GET'])
 def get_mess_menu(request) -> Response:
     date_param = request.query_params.get('date')
@@ -1432,6 +1435,8 @@ def get_mess_menu(request) -> Response:
     return Response(payload, status=status.HTTP_200_OK)
 
 
+@cache_page(60 * 15)
+@vary_on_headers('X-Batch-Code')
 @api_view(['GET'])
 def get_dashboard_extras(request) -> Response:
     batch, batch_error = _batch_from_request(request)
