@@ -1811,7 +1811,10 @@ def change_student_password(request, roll_number: str) -> Response:
 
 @api_view(['GET', 'PUT'])
 def admin_settings(request) -> Response:
-    _, _, error_response = _require_ipmo_admin(request)
+    if request.method == 'GET':
+        _, _, error_response = _require_admin(request)
+    else:
+        _, _, error_response = _require_ipmo_admin(request)
     if error_response:
         return error_response
 
@@ -1923,7 +1926,10 @@ def admin_student_detail(request, roll_number: str) -> Response:
 
 @api_view(['GET', 'POST'])
 def admin_courses(request) -> Response:
-    _, _, error_response = _require_ipmo_admin(request)
+    if request.method == 'GET':
+        _, _, error_response = _require_admin(request)
+    else:
+        _, _, error_response = _require_ipmo_admin(request)
     if error_response:
         return error_response
 
