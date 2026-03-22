@@ -47,10 +47,10 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  const login = async ({ rollNumber, password }) => {
+  const login = async ({ rollNumber, password, captchaToken = '' }) => {
     setLoading(true)
     try {
-      const response = await loginWithRetry({ rollNumber, password })
+      const response = await loginWithRetry({ rollNumber, password, captchaToken })
 
       const { accessToken, refreshToken, user: parsedUser } = normalizeLoginPayload(
         response.data,
@@ -74,8 +74,11 @@ export function AuthProvider({ children }) {
     setUser(null)
   }
 
-  async function loginWithRetry({ rollNumber, password }) {
+  async function loginWithRetry({ rollNumber, password, captchaToken = '' }) {
     const payload = { roll_number: rollNumber, password }
+    if (captchaToken) {
+      payload.captcha_token = captchaToken
+    }
     const maxAttempts = 3
     let attempt = 0
 

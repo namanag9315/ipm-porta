@@ -1,14 +1,10 @@
 import {
   AlertCircle,
-  BellRing,
-  BookOpenText,
-  BusFront,
   GraduationCap,
-  RefreshCw,
-  UtensilsCrossed,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import ReCAPTCHA from 'react-google-recaptcha'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import iimIndoreWatermark from '../assets/iim indore image.webp'
@@ -18,50 +14,42 @@ import { useAuth } from '../hooks/useAuth'
 
 const CAMPUS_HERO_IMAGE_URL = iimIndoreWatermark
 const IIM_INDORE_LOGO_URL = 'https://upload.wikimedia.org/wikipedia/commons/a/a5/IIM_Indore_Logo.svg'
-const CAPTCHA_OPTIONS = [
-  { id: 'book', label: 'Book', icon: BookOpenText },
-  { id: 'bus', label: 'Bus', icon: BusFront },
-  { id: 'meal', label: 'Mess Meal', icon: UtensilsCrossed },
-  { id: 'notice', label: 'Notice', icon: BellRing },
-]
-
-function randomCaptchaId() {
-  const index = Math.floor(Math.random() * CAPTCHA_OPTIONS.length)
-  return CAPTCHA_OPTIONS[index].id
-}
+const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY || ''
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { login, loading } = useAuth()
+  const recaptchaRef = useRef(null)
 
   const [rollNumber, setRollNumber] = useState('')
   const [password, setPassword] = useState('')
-  const [captchaTarget, setCaptchaTarget] = useState(() => randomCaptchaId())
-  const [captchaSelection, setCaptchaSelection] = useState('')
+  const [captchaToken, setCaptchaToken] = useState('')
   const [error, setError] = useState('')
 
   const fromPath = location.state?.from?.pathname || '/dashboard'
+  const recaptchaEnabled = Boolean(RECAPTCHA_SITE_KEY)
 
-  const selectedCaptcha = CAPTCHA_OPTIONS.find((option) => option.id === captchaTarget)
-
-  function refreshCaptcha() {
-    setCaptchaTarget(randomCaptchaId())
-    setCaptchaSelection('')
+  function resetCaptcha() {
+    setCaptchaToken('')
+    recaptchaRef.current?.reset()
   }
 
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
 
-    if (!captchaSelection || captchaSelection !== captchaTarget) {
-      setError('Captcha check failed. Please pick the correct icon to continue.')
-      refreshCaptcha()
+    if (recaptchaEnabled && !captchaToken) {
+      setError('Please complete the captcha challenge.')
       return
     }
 
     try {
-      await login({ rollNumber: rollNumber.trim().toUpperCase(), password })
+      await login({
+        rollNumber: rollNumber.trim().toUpperCase(),
+        password,
+        captchaToken,
+      })
       navigate(fromPath, { replace: true })
     } catch (submitError) {
       const status = submitError?.response?.status
@@ -73,6 +61,9 @@ export default function LoginPage() {
           ? 'The server is waking up. Please wait 20-30 seconds and try again.'
           : 'Unable to sign in. Please verify your roll number and password.')
       setError(message)
+      if (recaptchaEnabled) {
+        resetCaptcha()
+      }
     }
   }
 
@@ -157,46 +148,23 @@ export default function LoginPage() {
               required
             />
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-600">
-                  Creative Captcha
+            {recaptchaEnabled ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
+                <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-600">
+                  Security Check
                 </p>
-                <button
-                  type="button"
-                  onClick={refreshCaptcha}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-100"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  New
-                </button>
+                <ReCAPTCHA
+                  ref={recaptchaRef}
+                  sitekey={RECAPTCHA_SITE_KEY}
+                  onChange={(token) => setCaptchaToken(token || '')}
+                  onExpired={resetCaptcha}
+                />
               </div>
-              <p className="text-sm text-slate-700">
-                Tap the icon for{' '}
-                <span className="font-bold text-iim-blue">{selectedCaptcha?.label || 'the prompt'}</span>
-              </p>
-              <div className="mt-3 grid grid-cols-4 gap-2">
-                {CAPTCHA_OPTIONS.map((option) => {
-                  const Icon = option.icon
-                  const selected = captchaSelection === option.id
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => setCaptchaSelection(option.id)}
-                      className={cn(
-                        'inline-flex h-11 items-center justify-center rounded-xl border transition',
-                        selected
-                          ? 'border-iim-blue bg-blue-50 text-iim-blue'
-                          : 'border-slate-300 bg-white text-slate-500 hover:border-slate-400 hover:text-slate-700',
-                      )}
-                    >
-                      <Icon className="h-5 w-5" />
-                    </button>
-                  )
-                })}
+            ) : (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                reCAPTCHA is not configured for this environment yet.
               </div>
-            </div>
+            )}
 
             {error ? (
               <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -211,7 +179,7 @@ export default function LoginPage() {
               type="submit"
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.98 }}
-              disabled={loading}
+              disabled={loading || (recaptchaEnabled && !captchaToken)}
               className={cn(
                 'h-12 w-full rounded-2xl bg-iim-blue text-sm font-semibold text-white transition-all duration-300',
                 'shadow-[0_10px_25px_rgba(30,58,138,0.25)] hover:shadow-glow-gold',

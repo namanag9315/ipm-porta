@@ -102,6 +102,40 @@ def _parse_bool(value: object, default: bool = False) -> bool:
     return default
 
 
+def _verify_recaptcha_token(captcha_token: str, remote_ip: str | None = None) -> tuple[bool, str]:
+    secret_key = str(getattr(settings, 'RECAPTCHA_SECRET_KEY', '') or '').strip()
+    if not secret_key:
+        return False, 'Captcha is not configured on server.'
+
+    payload = {
+        'secret': secret_key,
+        'response': captcha_token,
+    }
+    if remote_ip:
+        payload['remoteip'] = str(remote_ip)
+
+    try:
+        verify_response = requests.post(
+            'https://www.google.com/recaptcha/api/siteverify',
+            data=payload,
+            timeout=8,
+        )
+        verify_response.raise_for_status()
+        verify_data = verify_response.json()
+    except Exception:
+        logger.exception('reCAPTCHA verification request failed.')
+        return False, 'Captcha verification service is unavailable right now. Please retry.'
+
+    if bool(verify_data.get('success')):
+        return True, ''
+
+    error_codes = verify_data.get('error-codes') or []
+    if isinstance(error_codes, list) and error_codes:
+        compact_codes = ', '.join(str(code) for code in error_codes)
+        return False, f'Captcha verification failed ({compact_codes}).'
+    return False, 'Captcha verification failed. Please try again.'
+
+
 def _normalize_upi_id(value: object) -> tuple[str | None, str | None]:
     text = str(value or '').strip().lower()
     if not text:
@@ -1350,6 +1384,26 @@ def login_student(request) -> Response:
             {'detail': 'roll_number and password are required.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    if bool(getattr(settings, 'RECAPTCHA_REQUIRED', False)):
+        captcha_token = str(request.data.get('captcha_token', '')).strip()
+        if not captcha_token:
+            return Response(
+                {'detail': 'Captcha token is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        captcha_ok, captcha_error = _verify_recaptcha_token(
+            captcha_token,
+            request.META.get('REMOTE_ADDR'),
+        )
+        if not captcha_ok:
+            if 'not configured' in captcha_error.lower():
+                return Response(
+                    {'detail': captcha_error},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            return Response({'detail': captcha_error}, status=status.HTTP_400_BAD_REQUEST)
 
     student = Student.objects.filter(roll_number=roll_number).first()
     if student is None:

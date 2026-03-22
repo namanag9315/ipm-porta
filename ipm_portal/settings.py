@@ -198,6 +198,15 @@ BIRTHDAY_SHEET_ID = os.getenv('BIRTHDAY_SHEET_ID', '')
 DEFAULT_BATCH_CODE = os.getenv('DEFAULT_BATCH_CODE', '').strip().upper()
 ONLY_BATCH_CODE = os.getenv('ONLY_BATCH_CODE', '').strip().upper()
 
+RECAPTCHA_SECRET_KEY = os.getenv('RECAPTCHA_SECRET_KEY', '').strip()
+_recaptcha_required_env = os.getenv('RECAPTCHA_REQUIRED', '').strip().lower()
+if _recaptcha_required_env in {'1', 'true', 'yes', 'on'}:
+    RECAPTCHA_REQUIRED = True
+elif _recaptcha_required_env in {'0', 'false', 'no', 'off'}:
+    RECAPTCHA_REQUIRED = False
+else:
+    RECAPTCHA_REQUIRED = bool(RECAPTCHA_SECRET_KEY)
+
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://127.0.0.1:6379/0')
 CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
 CELERY_ACCEPT_CONTENT = ['json']
