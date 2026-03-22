@@ -1861,18 +1861,23 @@ def admin_students(request) -> Response:
     _, _, error_response = _require_ipmo_admin(request)
     if error_response:
         return error_response
+
+    if request.method == 'GET':
+        requested_batch_code = _normalize_batch_code(request.query_params.get('batch_code'))
+        preferred_code = _preferred_batch_code()
+        if preferred_code:
+            requested_batch_code = requested_batch_code or preferred_code
+
+        students = Student.objects.select_related('batch').order_by('roll_number')
+        if requested_batch_code:
+            students = students.filter(batch_id=requested_batch_code)
+
+        serializer = StudentSerializer(students, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     batch, batch_error = _batch_from_request(request, required=False)
     if batch_error:
         return batch_error
-
-    if request.method == 'GET':
-        students = (
-            Student.objects.select_related('batch')
-            .filter(batch=batch)
-            .order_by('roll_number')
-        )
-        serializer = StudentSerializer(students, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
     payload = dict(request.data)
     payload['batch_code'] = payload.get('batch_code') or batch.code
@@ -1933,13 +1938,22 @@ def admin_courses(request) -> Response:
     if error_response:
         return error_response
 
-    batch_code = _normalize_batch_code(request.query_params.get('batch_code'))
+    requested_batch_code = _normalize_batch_code(request.query_params.get('batch_code'))
+    preferred_code = _preferred_batch_code()
+    if preferred_code:
+        requested_batch_code = requested_batch_code or preferred_code
 
     if request.method == 'GET':
         course_qs = Course.objects.all()
-        if batch_code:
-            course_qs = course_qs.filter(studentcourse__batch_id=batch_code).distinct()
-        
+        if requested_batch_code:
+            filtered_qs = course_qs.filter(
+                Q(studentcourse__batch_id=requested_batch_code)
+                | Q(attendancerecord__batch_id=requested_batch_code)
+                | Q(classsession__batch_id=requested_batch_code)
+            ).distinct()
+            if filtered_qs.exists():
+                course_qs = filtered_qs
+
         courses = course_qs.order_by('code')
         serializer = CourseSerializer(courses, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)

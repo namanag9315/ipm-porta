@@ -59,6 +59,28 @@ function extractApiErrorMessage(error, fallbackMessage) {
   return fallbackMessage
 }
 
+function extractValidationError(error, fallbackMessage) {
+  const detailMessage = extractApiErrorMessage(error, '')
+  if (detailMessage) {
+    return detailMessage
+  }
+  const payload = error?.response?.data
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const formatted = Object.entries(payload)
+      .map(([field, value]) => {
+        if (Array.isArray(value)) {
+          return `${field}: ${value.join(', ')}`
+        }
+        return `${field}: ${String(value)}`
+      })
+      .join(' | ')
+    if (formatted) {
+      return formatted
+    }
+  }
+  return fallbackMessage
+}
+
 async function requestWithRetry(requestFactory, options = {}) {
   const maxAttempts = options.attempts || 3
   const initialDelayMs = options.initialDelayMs || 1200
@@ -287,7 +309,7 @@ export default function IPMODashboard() {
       setNewStudent(emptyStudent)
       setSuccess('Student created.')
     } catch (createError) {
-      setError(createError?.response?.data?.detail || 'Unable to create student.')
+      setError(extractValidationError(createError, 'Unable to create student.'))
     }
   }
 
@@ -303,7 +325,7 @@ export default function IPMODashboard() {
       )
       setSuccess('Student updated.')
     } catch (updateError) {
-      setError(updateError?.response?.data?.detail || 'Unable to update student.')
+      setError(extractValidationError(updateError, 'Unable to update student.'))
     }
   }
 
@@ -317,7 +339,7 @@ export default function IPMODashboard() {
       setStudents((current) => current.filter((student) => student.roll_number !== rollNumber))
       setSuccess('Student removed.')
     } catch (deleteError) {
-      setError(deleteError?.response?.data?.detail || 'Unable to remove student.')
+      setError(extractValidationError(deleteError, 'Unable to remove student.'))
     }
   }
 
@@ -344,7 +366,7 @@ export default function IPMODashboard() {
       )
       setSuccess('Roll number updated.')
     } catch (updateError) {
-      setError(updateError?.response?.data?.detail || 'Unable to update roll number.')
+      setError(extractValidationError(updateError, 'Unable to update roll number.'))
     }
   }
 
@@ -362,7 +384,7 @@ export default function IPMODashboard() {
       setNewCourse(emptyCourse)
       setSuccess('Course created.')
     } catch (createError) {
-      setError(createError?.response?.data?.detail || 'Unable to create course.')
+      setError(extractValidationError(createError, 'Unable to create course.'))
     }
   }
 
@@ -376,7 +398,7 @@ export default function IPMODashboard() {
       )
       setSuccess('Course updated.')
     } catch (updateError) {
-      setError(updateError?.response?.data?.detail || 'Unable to update course.')
+      setError(extractValidationError(updateError, 'Unable to update course.'))
     }
   }
 
@@ -388,7 +410,7 @@ export default function IPMODashboard() {
       setCourses((current) => current.filter((course) => course.code !== courseCode))
       setSuccess('Course removed.')
     } catch (deleteError) {
-      setError(deleteError?.response?.data?.detail || 'Unable to remove course.')
+      setError(extractValidationError(deleteError, 'Unable to remove course.'))
     }
   }
 
