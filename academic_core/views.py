@@ -102,7 +102,13 @@ def _parse_bool(value: object, default: bool = False) -> bool:
     return default
 
 
-def _verify_recaptcha_token(captcha_token: str, remote_ip: str | None = None) -> tuple[bool, str]:
+def _verify_recaptcha_token(
+    captcha_token: str,
+    remote_ip: str | None = None,
+    *,
+    expected_action: str = '',
+    min_score: float | None = None,
+) -> tuple[bool, str]:
     secret_key = str(getattr(settings, 'RECAPTCHA_SECRET_KEY', '') or '').strip()
     if not secret_key:
         return False, 'Captcha is not configured on server.'
@@ -127,6 +133,22 @@ def _verify_recaptcha_token(captcha_token: str, remote_ip: str | None = None) ->
         return False, 'Captcha verification service is unavailable right now. Please retry.'
 
     if bool(verify_data.get('success')):
+        action = str(verify_data.get('action', '') or '').strip()
+        if expected_action:
+            if not action:
+                return False, 'Captcha action was not returned. Please retry.'
+            if action != expected_action:
+                return False, 'Captcha action mismatch. Please refresh and retry.'
+
+        if min_score is not None:
+            score_value = verify_data.get('score')
+            try:
+                score = float(score_value)
+            except (TypeError, ValueError):
+                return False, 'Captcha score was not returned. Please retry.'
+            if score < float(min_score):
+                return False, f'Captcha confidence too low ({score:.2f}). Please retry.'
+
         return True, ''
 
     error_codes = verify_data.get('error-codes') or []
@@ -1396,6 +1418,8 @@ def login_student(request) -> Response:
         captcha_ok, captcha_error = _verify_recaptcha_token(
             captcha_token,
             request.META.get('REMOTE_ADDR'),
+            expected_action=str(getattr(settings, 'RECAPTCHA_EXPECTED_ACTION', '') or '').strip(),
+            min_score=float(getattr(settings, 'RECAPTCHA_MIN_SCORE', 0.5)),
         )
         if not captcha_ok:
             if 'not configured' in captcha_error.lower():

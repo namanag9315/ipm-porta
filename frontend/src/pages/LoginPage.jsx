@@ -3,8 +3,7 @@ import {
   GraduationCap,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { useRef, useState } from 'react'
-import ReCAPTCHA from 'react-google-recaptcha'
+import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import iimIndoreWatermark from '../assets/iim indore image.webp'
@@ -15,33 +14,123 @@ import { useAuth } from '../hooks/useAuth'
 const CAMPUS_HERO_IMAGE_URL = iimIndoreWatermark
 const IIM_INDORE_LOGO_URL = 'https://upload.wikimedia.org/wikipedia/commons/a/a5/IIM_Indore_Logo.svg'
 const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY || ''
+const RECAPTCHA_ACTION = import.meta.env.VITE_RECAPTCHA_ACTION || 'student_login'
+
+async function requestRecaptchaToken(siteKey, action) {
+  if (!window.grecaptcha || typeof window.grecaptcha.execute !== 'function') {
+    throw new Error('reCAPTCHA is not ready yet.')
+  }
+
+  return new Promise((resolve, reject) => {
+    try {
+      window.grecaptcha.ready(async () => {
+        try {
+          const token = await window.grecaptcha.execute(siteKey, { action })
+          resolve(token || '')
+        } catch (error) {
+          reject(error)
+        }
+      })
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { login, loading } = useAuth()
-  const recaptchaRef = useRef(null)
 
   const [rollNumber, setRollNumber] = useState('')
   const [password, setPassword] = useState('')
-  const [captchaToken, setCaptchaToken] = useState('')
+  const [recaptchaReady, setRecaptchaReady] = useState(false)
   const [error, setError] = useState('')
 
   const fromPath = location.state?.from?.pathname || '/dashboard'
   const recaptchaEnabled = Boolean(RECAPTCHA_SITE_KEY)
 
-  function resetCaptcha() {
-    setCaptchaToken('')
-    recaptchaRef.current?.reset()
-  }
+  useEffect(() => {
+    if (!recaptchaEnabled) {
+      setRecaptchaReady(false)
+      return undefined
+    }
+
+    let cancelled = false
+    const scriptId = 'google-recaptcha-v3'
+
+    const markReady = () => {
+      if (cancelled) {
+        return
+      }
+      if (window.grecaptcha && typeof window.grecaptcha.ready === 'function') {
+        window.grecaptcha.ready(() => {
+          if (!cancelled) {
+            setRecaptchaReady(true)
+          }
+        })
+      }
+    }
+
+    const markError = () => {
+      if (!cancelled) {
+        setRecaptchaReady(false)
+      }
+    }
+
+    const existingScript = document.getElementById(scriptId)
+    if (existingScript) {
+      if (window.grecaptcha && typeof window.grecaptcha.execute === 'function') {
+        markReady()
+      } else {
+        existingScript.addEventListener('load', markReady)
+        existingScript.addEventListener('error', markError)
+      }
+      return () => {
+        cancelled = true
+        existingScript.removeEventListener('load', markReady)
+        existingScript.removeEventListener('error', markError)
+      }
+    }
+
+    const script = document.createElement('script')
+    script.id = scriptId
+    script.src = `https://www.google.com/recaptcha/api.js?render=${encodeURIComponent(RECAPTCHA_SITE_KEY)}`
+    script.async = true
+    script.defer = true
+    script.addEventListener('load', markReady)
+    script.addEventListener('error', markError)
+    document.head.appendChild(script)
+
+    return () => {
+      cancelled = true
+      script.removeEventListener('load', markReady)
+      script.removeEventListener('error', markError)
+    }
+  }, [recaptchaEnabled])
 
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
 
-    if (recaptchaEnabled && !captchaToken) {
-      setError('Please complete the captcha challenge.')
-      return
+    let captchaToken = ''
+    if (recaptchaEnabled) {
+      if (!recaptchaReady) {
+        setError('Security check is still loading. Please wait a moment and retry.')
+        return
+      }
+
+      try {
+        captchaToken = await requestRecaptchaToken(RECAPTCHA_SITE_KEY, RECAPTCHA_ACTION)
+      } catch {
+        setError('Unable to run captcha verification. Please refresh and try again.')
+        return
+      }
+
+      if (!captchaToken) {
+        setError('Captcha verification failed to generate a token. Please retry.')
+        return
+      }
     }
 
     try {
@@ -61,9 +150,6 @@ export default function LoginPage() {
           ? 'The server is waking up. Please wait 20-30 seconds and try again.'
           : 'Unable to sign in. Please verify your roll number and password.')
       setError(message)
-      if (recaptchaEnabled) {
-        resetCaptcha()
-      }
     }
   }
 
@@ -149,16 +235,12 @@ export default function LoginPage() {
             />
 
             {recaptchaEnabled ? (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
-                <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-600">
-                  Security Check
-                </p>
-                <ReCAPTCHA
-                  ref={recaptchaRef}
-                  sitekey={RECAPTCHA_SITE_KEY}
-                  onChange={(token) => setCaptchaToken(token || '')}
-                  onExpired={resetCaptcha}
-                />
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/90 px-4 py-3 text-xs text-slate-600">
+                {recaptchaReady ? (
+                  <span>Protected by Google reCAPTCHA v3.</span>
+                ) : (
+                  <span>Loading reCAPTCHA security check...</span>
+                )}
               </div>
             ) : (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
@@ -179,7 +261,7 @@ export default function LoginPage() {
               type="submit"
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.98 }}
-              disabled={loading || (recaptchaEnabled && !captchaToken)}
+              disabled={loading || (recaptchaEnabled && !recaptchaReady)}
               className={cn(
                 'h-12 w-full rounded-2xl bg-iim-blue text-sm font-semibold text-white transition-all duration-300',
                 'shadow-[0_10px_25px_rgba(30,58,138,0.25)] hover:shadow-glow-gold',

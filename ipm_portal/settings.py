@@ -42,6 +42,16 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -206,6 +216,8 @@ elif _recaptcha_required_env in {'0', 'false', 'no', 'off'}:
     RECAPTCHA_REQUIRED = False
 else:
     RECAPTCHA_REQUIRED = bool(RECAPTCHA_SECRET_KEY)
+RECAPTCHA_EXPECTED_ACTION = os.getenv('RECAPTCHA_EXPECTED_ACTION', 'student_login').strip()
+RECAPTCHA_MIN_SCORE = max(0.0, min(1.0, _float_env('RECAPTCHA_MIN_SCORE', 0.5)))
 
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://127.0.0.1:6379/0')
 CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
