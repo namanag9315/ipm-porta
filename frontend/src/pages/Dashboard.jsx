@@ -182,6 +182,48 @@ function sessionColorClass(session) {
   return courseColorClass(session?.course?.code || session?.raw_text || session?.id || 'SESSION')
 }
 
+function getAttendanceHealth(percentage) {
+  const value = Number(percentage || 0)
+  if (value >= 90) {
+    return {
+      barClass: 'bg-emerald-500',
+      textClass: 'text-emerald-600',
+      badgeClass: 'bg-emerald-50 text-emerald-700',
+      label: 'Excellent',
+    }
+  }
+  if (value >= 85) {
+    return {
+      barClass: 'bg-lime-500',
+      textClass: 'text-lime-600',
+      badgeClass: 'bg-lime-50 text-lime-700',
+      label: 'Strong',
+    }
+  }
+  if (value >= 80) {
+    return {
+      barClass: 'bg-amber-500',
+      textClass: 'text-amber-600',
+      badgeClass: 'bg-amber-50 text-amber-700',
+      label: 'Stable',
+    }
+  }
+  if (value >= 75) {
+    return {
+      barClass: 'bg-orange-500',
+      textClass: 'text-orange-600',
+      badgeClass: 'bg-orange-50 text-orange-700',
+      label: 'Watch',
+    }
+  }
+  return {
+    barClass: 'bg-rose-500',
+    textClass: 'text-rose-600',
+    badgeClass: 'bg-rose-50 text-rose-700',
+    label: 'Critical',
+  }
+}
+
 function normalizeCourseDisplayName(value) {
   const cleaned = String(value || '')
     .replace(/\bsection\s*[AB]\b/gi, '')
@@ -481,12 +523,17 @@ export default function Dashboard() {
     }
 
     const nextUpcomingClass = parsedSessions.find((session) => session.startAt.getTime() >= clock) || null
+    const currentLiveClass =
+      parsedSessions.find(
+        (session) => session.startAt.getTime() <= clock && session.endAt.getTime() >= clock,
+      ) || null
 
     return {
       title,
       targetDateIso,
       classes: daySessions.slice(0, MAX_DASHBOARD_CLASSES),
       nextUpcomingClass,
+      currentLiveClass,
     }
   }, [sessions, clock])
 
@@ -543,6 +590,18 @@ export default function Dashboard() {
   }, [courseAttendanceRows])
 
   const countdown = getCountdown(classWindow.nextUpcomingClass?.startAt)
+  const liveCountdown = getCountdown(classWindow.currentLiveClass?.endAt)
+  const isClassLive = Boolean(classWindow.currentLiveClass)
+  const timerValue = isClassLive ? liveCountdown : countdown
+  const timerLabel = isClassLive ? 'Class live now' : classWindow.nextUpcomingClass ? 'Next class in' : 'Schedule'
+  const timerCourseName = normalizeCourseDisplayName(
+    classWindow.currentLiveClass?.raw_text ||
+      classWindow.currentLiveClass?.course?.name ||
+      classWindow.nextUpcomingClass?.raw_text ||
+      classWindow.nextUpcomingClass?.course?.name ||
+      '',
+  )
+  const averageAttendanceHealth = getAttendanceHealth(averageAttendance)
   const driveLink = attendance.find((entry) => entry?.course?.drive_link)?.course?.drive_link
 
   return (
@@ -563,14 +622,36 @@ export default function Dashboard() {
           <div className="absolute -right-8 -top-10 h-44 w-44 rounded-full bg-cyan-200/20 blur-2xl" />
           <div className="absolute -bottom-16 left-0 h-44 w-44 rounded-full bg-blue-200/20 blur-3xl" />
 
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/75">
-            {classWindow.title}
-          </p>
-          <h2 className="mt-3 heading-tight max-w-xl text-3xl font-semibold leading-tight sm:text-4xl">
-            {classWindow.targetDateIso
-              ? formatDateLabel(`${classWindow.targetDateIso}T00:00:00`)
-              : 'No classes scheduled'}
-          </h2>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/75">
+                {classWindow.title}
+              </p>
+              <h2 className="mt-3 heading-tight max-w-xl text-3xl font-semibold leading-tight sm:text-4xl">
+                {classWindow.targetDateIso
+                  ? formatDateLabel(`${classWindow.targetDateIso}T00:00:00`)
+                  : 'No classes scheduled'}
+              </h2>
+            </div>
+
+            <div className="min-w-[180px] rounded-xl bg-white/10 px-4 py-3 backdrop-blur-sm">
+              <div className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    'h-2.5 w-2.5 rounded-full',
+                    isClassLive ? 'animate-pulse bg-emerald-400' : 'bg-cyan-100',
+                  )}
+                />
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/80">
+                  {timerLabel}
+                </p>
+              </div>
+              <p className="heading-tight mt-2 text-2xl font-bold">{timerValue}</p>
+              {timerCourseName ? (
+                <p className="mt-1 text-xs text-white/80">{timerCourseName}</p>
+              ) : null}
+            </div>
+          </div>
 
           {classWindow.classes.length > 0 ? (
             <>
@@ -580,17 +661,32 @@ export default function Dashboard() {
                   const attendancePercentage = attendanceByCourseCode.get(sessionCourseCode)
                   const shouldAttend =
                     Number.isFinite(attendancePercentage) && Number(attendancePercentage) < 75
+                  const isLiveSession =
+                    session.startAt.getTime() <= clock && session.endAt.getTime() >= clock
 
                   return (
                     <article
                       key={session.id}
-                      className="rounded-xl bg-white/10 px-4 py-3 backdrop-blur-sm"
+                      className={cn(
+                        'rounded-xl bg-white/10 px-4 py-3 backdrop-blur-sm',
+                        isLiveSession && 'ring-1 ring-emerald-300/70',
+                      )}
                     >
                       <div className="flex items-center gap-2">
-                        <span className={cn('h-2.5 w-2.5 rounded-full', sessionColorClass(session))} />
+                        <span
+                          className={cn(
+                            'h-2.5 w-2.5 rounded-full',
+                            isLiveSession ? 'animate-pulse bg-emerald-400' : sessionColorClass(session),
+                          )}
+                        />
                         <p className="text-sm font-semibold text-white">
                           {session.raw_text || session.course?.name || 'Class'}
                         </p>
+                        {isLiveSession ? (
+                          <span className="rounded-full bg-emerald-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-100">
+                            Live
+                          </span>
+                        ) : null}
                       </div>
                       <p className="mt-1 text-xs text-white/80">
                         {formatTimeLabel(session.startAt)} - {formatTimeLabel(session.endAt)} • Room{' '}
@@ -605,13 +701,6 @@ export default function Dashboard() {
                   )
                 })}
               </div>
-
-              {classWindow.nextUpcomingClass ? (
-                <>
-                  <p className="mt-8 text-sm text-white/75">Next class starts in</p>
-                  <p className="heading-tight mt-1 text-3xl font-bold sm:text-4xl">{countdown}</p>
-                </>
-              ) : null}
             </>
           ) : (
             <p className="mt-6 text-sm text-white/80">No classes found for this schedule window.</p>
@@ -626,7 +715,12 @@ export default function Dashboard() {
         >
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className={DASHBOARD_CARD_TITLE_CLASS}>Attendance by Course</h3>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+            <span
+              className={cn(
+                'rounded-full px-2.5 py-1 text-xs font-semibold',
+                averageAttendanceHealth.badgeClass,
+              )}
+            >
               Avg {averageAttendance}%
             </span>
           </div>
@@ -643,36 +737,37 @@ export default function Dashboard() {
               <p className="text-sm text-slate-500">Attendance percentages are not available yet.</p>
             ) : (
               <div className="max-h-52 space-y-3 overflow-y-auto pr-1">
-                {courseAttendanceRows.map((item) => (
-                  <div key={item.code} className="rounded-xl bg-slate-50/80 p-3">
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className={cn('h-2.5 w-2.5 rounded-full', courseColorClass(item.code))} />
-                        <p className="text-sm font-semibold text-slate-800">{item.code}</p>
+                {courseAttendanceRows.map((item) => {
+                  const health = getAttendanceHealth(item.percentage)
+                  return (
+                    <div key={item.code} className="rounded-xl bg-slate-50/80 p-3">
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className={cn('h-2.5 w-2.5 rounded-full', courseColorClass(item.code))} />
+                          <p className="text-sm font-semibold text-slate-800">{item.code}</p>
+                        </div>
+                        <p className={cn('text-xs font-semibold', health.textClass)}>
+                          {item.percentage.toFixed(2)}%
+                        </p>
                       </div>
-                      <p className="text-xs font-medium text-slate-600">{item.percentage.toFixed(2)}%</p>
+                      <div className="h-2 rounded-full bg-slate-100">
+                        <div
+                          className={cn('h-2 rounded-full', health.barClass)}
+                          style={{ width: `${Math.max(0, Math.min(100, item.percentage))}%` }}
+                        />
+                      </div>
+                      <div className="mt-1 flex items-center justify-between gap-2">
+                        <p className="text-xs text-slate-500">{item.name}</p>
+                        <p className={cn('text-[11px] font-semibold', health.textClass)}>{health.label}</p>
+                      </div>
+                      {item.percentage < 75 ? (
+                        <p className="mt-1 text-[11px] font-semibold text-rose-600">
+                          Important: Attend upcoming classes
+                        </p>
+                      ) : null}
                     </div>
-                    <div className="h-2 rounded-full bg-slate-100">
-                      <div
-                        className={cn(
-                          'h-2 rounded-full',
-                          item.percentage >= 85
-                            ? 'bg-emerald-500'
-                            : item.percentage >= 75
-                              ? 'bg-amber-500'
-                              : 'bg-rose-500',
-                        )}
-                        style={{ width: `${Math.max(0, Math.min(100, item.percentage))}%` }}
-                      />
-                    </div>
-                    <p className="mt-1 text-xs text-slate-500">{item.name}</p>
-                    {item.percentage < 75 ? (
-                      <p className="mt-1 text-[11px] font-semibold text-rose-600">
-                        Important: Attend upcoming classes
-                      </p>
-                    ) : null}
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
