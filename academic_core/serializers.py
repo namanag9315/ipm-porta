@@ -274,6 +274,7 @@ class AssignmentSerializer(serializers.ModelSerializer):
     course = CourseSerializer(read_only=True)
     due_at = serializers.SerializerMethodField()
     group_members_list = serializers.SerializerMethodField()
+    batch_code = serializers.SerializerMethodField()
 
     def get_due_at(self, obj):
         due_time = obj.due_time or datetime.time(23, 59)
@@ -283,10 +284,14 @@ class AssignmentSerializer(serializers.ModelSerializer):
     def get_group_members_list(self, obj):
         return _split_group_members(obj.group_members)
 
+    def get_batch_code(self, obj):
+        return obj.batch_id or ''
+
     class Meta:
         model = Assignment
         fields = [
             'id',
+            'batch_code',
             'course',
             'title',
             'description',

@@ -12,6 +12,7 @@ import requests
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.conf import settings
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
@@ -221,6 +222,13 @@ def _admin_token_from_request(request) -> Token | None:
     if not token.user.is_active or not token.user.is_staff:
         return None
     return token
+
+
+def _invalidate_cached_dashboard_payloads() -> None:
+    try:
+        cache.clear()
+    except Exception:
+        logger.exception('Failed to invalidate dashboard caches after content update.')
 
 
 def _require_admin(request) -> tuple[object | None, Token | None, Response | None]:
@@ -1563,7 +1571,7 @@ def get_mess_menu(request) -> Response:
     return Response(payload, status=status.HTTP_200_OK)
 
 
-@cache_page(60 * 15)
+@cache_page(60 * 2)
 @vary_on_headers('X-Batch-Code', 'X-Student-Roll-Number')
 @api_view(['GET'])
 def get_dashboard_extras(request) -> Response:
@@ -1591,7 +1599,7 @@ def get_dashboard_extras(request) -> Response:
     recent_announcements = Announcement.objects.filter(
         Q(starts_at__isnull=True) | Q(starts_at__lte=now),
         Q(expires_at__isnull=True) | Q(expires_at__gte=now),
-        batch=batch,
+        Q(batch=batch) | Q(batch__isnull=True),
     ).select_related('target_course')
     announcement_visibility = Q(target_type='ALL')
     if student is not None:
@@ -1604,7 +1612,7 @@ def get_dashboard_extras(request) -> Response:
     recent_announcements = recent_announcements.filter(announcement_visibility).order_by('-created_at')[:3]
     current_time = now.astimezone(LOCAL_TIMEZONE).time().replace(second=0, microsecond=0)
     upcoming_assignments = Assignment.objects.select_related('course').filter(
-        batch=batch,
+        Q(batch=batch) | Q(batch__isnull=True),
     ).filter(
         Q(due_date__gt=today)
         | Q(due_date=today, due_time__isnull=True)
@@ -2114,6 +2122,7 @@ def admin_announcements(request) -> Response:
         expires_at=expires_at,
         attachment=request.FILES.get('attachment'),
     )
+    _invalidate_cached_dashboard_payloads()
     serializer = AnnouncementSerializer(announcement, context={'request': request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -2133,6 +2142,7 @@ def admin_announcement_detail(request, announcement_id: int) -> Response:
 
     if request.method == 'DELETE':
         announcement.delete()
+        _invalidate_cached_dashboard_payloads()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     update_fields: list[str] = []
@@ -2212,6 +2222,7 @@ def admin_announcement_detail(request, announcement_id: int) -> Response:
 
     if update_fields:
         announcement.save(update_fields=list(set(update_fields)))
+        _invalidate_cached_dashboard_payloads()
 
     serializer = AnnouncementSerializer(announcement, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
@@ -2258,6 +2269,7 @@ def admin_assignments(request) -> Response:
         due_date=due_date,
         due_time=due_time,
     )
+    _invalidate_cached_dashboard_payloads()
     serializer = AssignmentSerializer(assignment)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -2275,6 +2287,7 @@ def admin_assignment_detail(request, assignment_id: int) -> Response:
     assignment = get_object_or_404(Assignment, pk=assignment_id, batch=batch)
     if request.method == 'DELETE':
         assignment.delete()
+        _invalidate_cached_dashboard_payloads()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     update_fields: list[str] = []
@@ -2316,6 +2329,7 @@ def admin_assignment_detail(request, assignment_id: int) -> Response:
 
     if update_fields:
         assignment.save(update_fields=list(set(update_fields)))
+        _invalidate_cached_dashboard_payloads()
 
     serializer = AssignmentSerializer(assignment)
     return Response(serializer.data, status=status.HTTP_200_OK)
@@ -2421,6 +2435,7 @@ def admin_polls(request) -> Response:
         PollOption.objects.bulk_create(
             [PollOption(poll=poll, text=option[:220]) for option in cleaned_options]
         )
+    _invalidate_cached_dashboard_payloads()
 
     created_poll = Poll.objects.select_related('target_course').prefetch_related(
         'options',
@@ -2445,6 +2460,7 @@ def admin_poll_detail(request, poll_id: int) -> Response:
     poll = get_object_or_404(Poll, pk=poll_id, batch=batch)
     if request.method == 'DELETE':
         poll.delete()
+        _invalidate_cached_dashboard_payloads()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     update_fields: list[str] = []
@@ -2474,6 +2490,7 @@ def admin_poll_detail(request, poll_id: int) -> Response:
 
     if update_fields:
         poll.save(update_fields=list(set(update_fields)))
+        _invalidate_cached_dashboard_payloads()
 
     refreshed_poll = Poll.objects.select_related('target_course').prefetch_related(
         'options',

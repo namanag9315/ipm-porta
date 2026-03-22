@@ -133,6 +133,7 @@ export default function AdminPortal() {
     attachment: null,
   })
   const [assignmentForm, setAssignmentForm] = useState({
+    batchCode: '',
     courseCode: '',
     title: '',
     description: '',
@@ -239,6 +240,7 @@ export default function AdminPortal() {
       setAvailableBatches(nextBatches)
       setAssignmentForm((current) => ({
         ...current,
+        batchCode: current.batchCode || selectedBatch || nextBatches[0]?.code || '',
         courseCode: current.courseCode || nextCourses[0]?.code || '',
       }))
       setAnnouncementForm((current) => ({
@@ -465,6 +467,11 @@ export default function AdminPortal() {
     setGlobalError('')
     setGlobalSuccess('')
 
+    if (!assignmentForm.batchCode) {
+      setGlobalError('Please choose a batch for the assignment.')
+      return
+    }
+
     const dueAt = toIsoDateTime(assignmentForm.dueDate, assignmentForm.dueTime)
     if (!dueAt) {
       setGlobalError('Please provide a valid due date and due time.')
@@ -473,6 +480,7 @@ export default function AdminPortal() {
 
     try {
       const response = await adminApi.post('/api/v1/admin/assignments/', {
+        batch_code: assignmentForm.batchCode,
         course_code: assignmentForm.courseCode,
         title: assignmentForm.title,
         description: assignmentForm.description,
@@ -514,12 +522,18 @@ export default function AdminPortal() {
     }
   }
 
-  async function deleteAssignment(assignmentId) {
+  async function deleteAssignment(assignment) {
     setGlobalError('')
     setGlobalSuccess('')
     try {
-      await adminApi.delete(`/api/v1/admin/assignments/${assignmentId}/`)
-      setAssignments((current) => current.filter((assignment) => assignment.id !== assignmentId))
+      const assignmentId = assignment?.id
+      if (!assignmentId) {
+        throw new Error('Invalid assignment selected.')
+      }
+      await adminApi.delete(`/api/v1/admin/assignments/${assignmentId}/`, {
+        params: assignment?.batch_code ? { batch_code: assignment.batch_code } : undefined,
+      })
+      setAssignments((current) => current.filter((currentAssignment) => currentAssignment.id !== assignmentId))
       setGlobalSuccess('Assignment deleted.')
     } catch (error) {
       setGlobalError(error?.response?.data?.detail || 'Failed to delete assignment.')
@@ -530,6 +544,11 @@ export default function AdminPortal() {
     event.preventDefault()
     setGlobalError('')
     setGlobalSuccess('')
+
+    if (!pollForm.batchCode) {
+      setGlobalError('Please choose a batch for the poll.')
+      return
+    }
 
     const cleanedOptions = pollForm.options.map((item) => item.trim()).filter(Boolean)
     if (cleanedOptions.length < 2) {
@@ -1043,7 +1062,25 @@ export default function AdminPortal() {
 
                 {activeComposerTab === 'assignment' ? (
                   <form onSubmit={createAssignment} className="mt-5 space-y-4">
-                    <div className="grid gap-4 md:grid-cols-2">
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Batch
+                        <select
+                          value={assignmentForm.batchCode}
+                          onChange={(event) =>
+                            setAssignmentForm((current) => ({ ...current, batchCode: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                          required
+                        >
+                          {availableBatches.map((batch) => (
+                            <option key={batch.code} value={batch.code}>
+                              {batch.display_name || batch.name || batch.code}
+                              {batch.ipm_year ? ` (${batch.ipm_year})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                       <label className="block text-sm font-medium text-slate-700">
                         Course
                         <select
@@ -1510,6 +1547,7 @@ export default function AdminPortal() {
                       <div key={assignment.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
                         <p className="text-sm font-semibold text-slate-900">{assignment.title}</p>
                         <p className="mt-1 text-xs text-slate-500">
+                          {assignment.batch_code ? `${assignment.batch_code} • ` : ''}
                           {assignment.course?.code || 'N/A'} • Due {toLocalDateTimeLabel(assignment.due_at)}
                         </p>
                         {assignment.description ? (
@@ -1535,7 +1573,7 @@ export default function AdminPortal() {
                         ) : null}
                         <button
                           type="button"
-                          onClick={() => deleteAssignment(assignment.id)}
+                          onClick={() => deleteAssignment(assignment)}
                           className="mt-3 inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-50"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
