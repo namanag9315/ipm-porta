@@ -617,7 +617,7 @@ export default function Dashboard() {
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35 }}
-          className="relative col-span-1 overflow-hidden rounded-2xl border border-slate-100 bg-gradient-to-br from-slate-900 via-[#1E3A8A] to-[#2B4EA2] p-6 text-white shadow-[0_4px_24px_rgb(0,0,0,0.04)] md:col-span-3 lg:col-span-4"
+          className="relative col-span-1 overflow-hidden rounded-2xl border border-slate-100 bg-gradient-to-br from-slate-900 via-[#1E3A8A] to-[#2B4EA2] p-6 text-white shadow-[0_4px_24px_rgb(0,0,0,0.04)] md:col-span-3 lg:col-span-2"
         >
           <div className="absolute -right-8 -top-10 h-44 w-44 rounded-full bg-cyan-200/20 blur-2xl" />
           <div className="absolute -bottom-16 left-0 h-44 w-44 rounded-full bg-blue-200/20 blur-3xl" />
@@ -710,6 +710,50 @@ export default function Dashboard() {
         <motion.section
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.05 }}
+          className={cn(DASHBOARD_CARD_CLASS, 'h-full flex flex-col lg:col-span-2')}
+        >
+          <div className="mb-4 flex items-center gap-2">
+            <BellRing className="h-5 w-5 text-iim-blue" />
+            <h3 className={DASHBOARD_CARD_TITLE_CLASS}>Announcements</h3>
+          </div>
+          <p className={cn(DASHBOARD_CARD_SUBTEXT_CLASS, 'mb-3')}>Notices and poll alerts.</p>
+
+          {recentAnnouncements.length === 0 ? (
+            <p className="text-sm text-slate-500">No announcements posted yet.</p>
+          ) : (
+            <div className="max-h-[24rem] space-y-3 overflow-y-auto pr-1">
+              {recentAnnouncements.map((announcement) => (
+                <article
+                  key={announcement.id}
+                  className={cn(
+                    'rounded-xl bg-slate-50/80 p-4',
+                    announcement?._is_poll_alert && 'bg-amber-50',
+                  )}
+                >
+                  <p className="text-sm font-semibold text-slate-900">{announcement.title}</p>
+                  <p className="mt-1 text-xs text-slate-600">{announcement.content}</p>
+                  <p className="mt-2 text-[11px] font-medium text-slate-500">
+                    {announcement.posted_by} • {formatDateLabel(announcement.created_at)}
+                  </p>
+                  {announcement?._is_poll_alert ? (
+                    <Link
+                      to="/dashboard/polls"
+                      className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-iim-blue hover:underline"
+                    >
+                      Open Polls
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          )}
+        </motion.section>
+
+        <motion.section
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.08 }}
           className={cn(DASHBOARD_CARD_CLASS, 'h-full flex flex-col lg:col-span-2')}
         >
@@ -725,12 +769,28 @@ export default function Dashboard() {
             </span>
           </div>
           <p className={DASHBOARD_CARD_SUBTEXT_CLASS}>Live percentage by subject.</p>
-
-          {courseAttendanceRows.length > 4 ? (
-            <div className="mb-3 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">
-              Scroll list <ChevronRight className="h-3 w-3 rotate-90" />
-            </div>
-          ) : null}
+          <div className="mt-2 flex flex-wrap gap-3 text-[11px] font-medium text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              90+ Excellent
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-lime-500" />
+              85-89 Strong
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-amber-500" />
+              80-84 Stable
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-orange-500" />
+              75-79 Watch
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-rose-500" />
+              Below 75 Critical
+            </span>
+          </div>
 
           <div className="mt-4 flex-1">
             {courseAttendanceRows.length === 0 ? (
@@ -870,50 +930,6 @@ export default function Dashboard() {
               </div>
             )}
           </div>
-        </motion.section>
-
-        <motion.section
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, delay: 0.05 }}
-          className={cn(DASHBOARD_CARD_CLASS, 'lg:col-span-2')}
-        >
-          <div className="mb-4 flex items-center gap-2">
-            <BellRing className="h-5 w-5 text-iim-blue" />
-            <h3 className={DASHBOARD_CARD_TITLE_CLASS}>Announcements</h3>
-          </div>
-          <p className={cn(DASHBOARD_CARD_SUBTEXT_CLASS, 'mb-3')}>Notices and poll alerts.</p>
-
-          {recentAnnouncements.length === 0 ? (
-            <p className="text-sm text-slate-500">No announcements posted yet.</p>
-          ) : (
-            <div className="max-h-[24rem] space-y-3 overflow-y-auto pr-1">
-              {recentAnnouncements.map((announcement) => (
-                <article
-                  key={announcement.id}
-                  className={cn(
-                    'rounded-xl bg-slate-50/80 p-4',
-                    announcement?._is_poll_alert && 'bg-amber-50',
-                  )}
-                >
-                  <p className="text-sm font-semibold text-slate-900">{announcement.title}</p>
-                  <p className="mt-1 text-xs text-slate-600">{announcement.content}</p>
-                  <p className="mt-2 text-[11px] font-medium text-slate-500">
-                    {announcement.posted_by} • {formatDateLabel(announcement.created_at)}
-                  </p>
-                  {announcement?._is_poll_alert ? (
-                    <Link
-                      to="/dashboard/polls"
-                      className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-iim-blue hover:underline"
-                    >
-                      Open Polls
-                      <ArrowRight className="h-3.5 w-3.5" />
-                    </Link>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          )}
         </motion.section>
 
         <div className="space-y-6 lg:col-span-2">
