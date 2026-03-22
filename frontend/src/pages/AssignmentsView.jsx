@@ -129,9 +129,27 @@ export default function AssignmentsView() {
                   {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                 </button>
                 {isExpanded ? (
-                  <p className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                    {assignment.description || 'No description provided.'}
-                  </p>
+                  <div className="mt-2 space-y-2 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    <p>{assignment.description || 'No description provided.'}</p>
+                    {(assignment.group_members_list || assignment.group_members) ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {(Array.isArray(assignment.group_members_list)
+                          ? assignment.group_members_list
+                          : String(assignment.group_members || '')
+                              .split(/\n|,|;/g)
+                              .map((item) => item.trim())
+                              .filter(Boolean)
+                        ).map((member) => (
+                          <span
+                            key={`${assignment.id}-${member}`}
+                            className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700"
+                          >
+                            {member}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 ) : null}
               </article>
             )

@@ -2,10 +2,13 @@ import {
   BookOpenCheck,
   FolderUp,
   GraduationCap,
+  KeyRound,
   Loader2,
   LogOut,
   Save,
   Settings2,
+  ShieldCheck,
+  UserPlus2,
   Users,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -19,6 +22,7 @@ const TABS = [
   { key: 'students', label: 'Student Directory', icon: Users },
   { key: 'courses', label: 'Course Manager', icon: BookOpenCheck },
   { key: 'grades', label: 'Grade Uploads', icon: FolderUp },
+  { key: 'access', label: 'Access Control', icon: ShieldCheck },
 ]
 
 const emptyStudent = {
@@ -106,6 +110,13 @@ export default function IPMODashboard() {
   const [gradeUploadTerm, setGradeUploadTerm] = useState('')
   const [gradeFile, setGradeFile] = useState(null)
   const [uploadedGrades, setUploadedGrades] = useState([])
+  const [adminAccounts, setAdminAccounts] = useState([])
+  const [newAdminAccount, setNewAdminAccount] = useState({
+    username: '',
+    name: '',
+    password: '',
+    role: 'CR',
+  })
 
   const sortedStudents = useMemo(
     () => [...students].sort((left, right) => left.roll_number.localeCompare(right.roll_number)),
@@ -158,7 +169,7 @@ export default function IPMODashboard() {
         birthday_sheet_url: settingsRes.data?.birthday_sheet_url || '',
       })
 
-      const [studentsRes, coursesRes] = await Promise.allSettled([
+      const [studentsRes, coursesRes, accountsRes] = await Promise.allSettled([
         requestWithRetry(
           () =>
             adminApi.get('/api/v1/admin/students/', {
@@ -171,6 +182,13 @@ export default function IPMODashboard() {
           () =>
             adminApi.get('/api/v1/admin/courses/', {
               params: resolvedBatch ? { batch_code: resolvedBatch } : undefined,
+              timeout: IPMO_API_TIMEOUT_MS,
+            }),
+          { attempts: 3, initialDelayMs: 1200 },
+        ),
+        requestWithRetry(
+          () =>
+            adminApi.get('/api/v1/admin/accounts/', {
               timeout: IPMO_API_TIMEOUT_MS,
             }),
           { attempts: 3, initialDelayMs: 1200 },
@@ -190,6 +208,13 @@ export default function IPMODashboard() {
       } else {
         setCourses([])
         loadErrors.push(`courses: ${extractApiErrorMessage(coursesRes.reason, 'unavailable')}`)
+      }
+
+      if (accountsRes.status === 'fulfilled') {
+        setAdminAccounts(Array.isArray(accountsRes.value.data) ? accountsRes.value.data : [])
+      } else {
+        setAdminAccounts([])
+        loadErrors.push(`access: ${extractApiErrorMessage(accountsRes.reason, 'unavailable')}`)
       }
 
       if (loadErrors.length > 0) {
@@ -391,6 +416,64 @@ export default function IPMODashboard() {
     } catch (uploadError) {
       setError(uploadError?.response?.data?.detail || 'Unable to upload grade document.')
     }
+  }
+
+  async function createAdminAccount(event) {
+    event.preventDefault()
+    setError('')
+    setSuccess('')
+    try {
+      const response = await adminApi.post('/api/v1/admin/accounts/', {
+        username: newAdminAccount.username.trim(),
+        name: newAdminAccount.name.trim(),
+        password: newAdminAccount.password,
+        role: newAdminAccount.role,
+      })
+      setAdminAccounts((current) => [response.data, ...current])
+      setNewAdminAccount({
+        username: '',
+        name: '',
+        password: '',
+        role: 'CR',
+      })
+      setSuccess('Admin access created.')
+    } catch (createError) {
+      setError(createError?.response?.data?.detail || 'Unable to create admin access.')
+    }
+  }
+
+  async function updateAdminAccount(accountId, patch) {
+    setError('')
+    setSuccess('')
+    try {
+      const response = await adminApi.patch(`/api/v1/admin/accounts/${accountId}/`, patch)
+      setAdminAccounts((current) =>
+        current.map((account) => (account.id === accountId ? response.data : account)),
+      )
+      setSuccess('Access updated.')
+    } catch (updateError) {
+      setError(updateError?.response?.data?.detail || 'Unable to update access.')
+    }
+  }
+
+  async function deactivateAdminAccount(accountId) {
+    setError('')
+    setSuccess('')
+    try {
+      await adminApi.delete(`/api/v1/admin/accounts/${accountId}/`)
+      setAdminAccounts((current) => current.filter((account) => account.id !== accountId))
+      setSuccess('Access revoked.')
+    } catch (deleteError) {
+      setError(deleteError?.response?.data?.detail || 'Unable to revoke access.')
+    }
+  }
+
+  async function resetAdminPassword(accountId, username) {
+    const nextPassword = window.prompt(`Enter new password for ${username}`)
+    if (!nextPassword) {
+      return
+    }
+    await updateAdminAccount(accountId, { password: nextPassword })
   }
 
   function logout() {
@@ -887,6 +970,137 @@ export default function IPMODashboard() {
                   </table>
                 </div>
               ) : null}
+            </section>
+          ) : null}
+
+          {activeTab === 'access' ? (
+            <section className="space-y-6">
+              <h2 className="text-xl font-semibold text-amber-100">CR/IPMO Access Control</h2>
+              <p className="text-sm text-slate-400">
+                Create credentials, assign role, reset passwords, and revoke access.
+              </p>
+
+              <form
+                onSubmit={createAdminAccount}
+                className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-800 bg-slate-950 p-4 md:grid-cols-5"
+              >
+                <input
+                  placeholder="Username"
+                  value={newAdminAccount.username}
+                  onChange={(event) =>
+                    setNewAdminAccount((current) => ({ ...current, username: event.target.value }))
+                  }
+                  className="h-10 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm"
+                  required
+                />
+                <input
+                  placeholder="Full name (optional)"
+                  value={newAdminAccount.name}
+                  onChange={(event) =>
+                    setNewAdminAccount((current) => ({ ...current, name: event.target.value }))
+                  }
+                  className="h-10 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm"
+                />
+                <input
+                  type="text"
+                  placeholder="Initial password"
+                  value={newAdminAccount.password}
+                  onChange={(event) =>
+                    setNewAdminAccount((current) => ({ ...current, password: event.target.value }))
+                  }
+                  className="h-10 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm"
+                  required
+                />
+                <select
+                  value={newAdminAccount.role}
+                  onChange={(event) =>
+                    setNewAdminAccount((current) => ({ ...current, role: event.target.value }))
+                  }
+                  className="h-10 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm"
+                >
+                  <option value="CR">CR</option>
+                  <option value="IPMO">IPMO</option>
+                </select>
+                <button
+                  type="submit"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-400 px-3 text-sm font-semibold text-slate-900"
+                >
+                  <UserPlus2 className="h-4 w-4" />
+                  Create Access
+                </button>
+              </form>
+
+              <div className="overflow-x-auto rounded-2xl border border-slate-800">
+                <table className="min-w-full divide-y divide-slate-800 text-sm">
+                  <thead className="bg-slate-950 text-slate-300">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Username</th>
+                      <th className="px-3 py-2 text-left">Name</th>
+                      <th className="px-3 py-2 text-left">Role</th>
+                      <th className="px-3 py-2 text-left">Status</th>
+                      <th className="px-3 py-2 text-left">Last Login</th>
+                      <th className="px-3 py-2 text-left">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {adminAccounts.map((account) => (
+                      <tr key={account.id}>
+                        <td className="px-3 py-2 font-medium">{account.username}</td>
+                        <td className="px-3 py-2">{account.name || '-'}</td>
+                        <td className="px-3 py-2">
+                          <select
+                            value={account.role}
+                            onChange={(event) =>
+                              updateAdminAccount(account.id, { role: event.target.value })
+                            }
+                            className="h-9 rounded-lg border border-slate-700 bg-slate-900 px-2"
+                          >
+                            <option value="CR">CR</option>
+                            <option value="IPMO">IPMO</option>
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateAdminAccount(account.id, { is_active: !Boolean(account.is_active) })
+                            }
+                            className={`rounded-lg px-2 py-1 text-xs font-semibold ${
+                              account.is_active
+                                ? 'bg-emerald-500/20 text-emerald-200'
+                                : 'bg-slate-700 text-slate-300'
+                            }`}
+                          >
+                            {account.is_active ? 'Active' : 'Disabled'}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-slate-400">
+                          {account.last_login ? new Date(account.last_login).toLocaleString() : 'Never'}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => resetAdminPassword(account.id, account.username)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-xs"
+                            >
+                              <KeyRound className="h-3.5 w-3.5" />
+                              Reset Password
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deactivateAdminAccount(account.id)}
+                              className="rounded-lg border border-rose-500/50 px-2 py-1 text-xs text-rose-200"
+                            >
+                              Revoke
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </section>
           ) : null}
         </main>

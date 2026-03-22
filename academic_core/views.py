@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
@@ -254,6 +255,18 @@ def _require_ipmo_admin(request) -> tuple[object | None, Token | None, Response 
     return admin_user, token, None
 
 
+def _serialize_admin_account(user: User) -> dict[str, object]:
+    return {
+        'id': user.id,
+        'username': user.username,
+        'name': user.get_full_name().strip(),
+        'is_active': user.is_active,
+        'role': 'IPMO' if user.is_superuser else 'CR',
+        'last_login': user.last_login,
+        'created_at': user.date_joined,
+    }
+
+
 def _extract_json_payload(text: str) -> object | None:
     cleaned = text.strip()
     if not cleaned:
@@ -440,10 +453,10 @@ def _pick_gemini_model_name(preferred_model: str, available_model_names: list[st
 
     for candidate in [
         preferred,
-        'gemini-2.5-flash',
-        'gemini-2.0-flash',
         'gemini-1.5-flash',
         'gemini-1.5-flash-latest',
+        'gemini-2.0-flash',
+        'gemini-2.5-flash',
         'gemini-1.5-pro',
     ]:
         if candidate and candidate in model_map:
@@ -456,7 +469,7 @@ def _pick_gemini_model_name(preferred_model: str, available_model_names: list[st
     if model_map:
         return next(iter(model_map.values()))
 
-    return preferred_model or 'gemini-2.0-flash'
+    return preferred_model or 'gemini-1.5-flash'
 
 
 def _is_gemini_quota_error(error_text: str) -> bool:
@@ -485,7 +498,7 @@ def _generate_gemini_draft(prompt: str) -> str:
     except Exception as exc:
         raise RuntimeError('google-generativeai is not installed.') from exc
 
-    configured_model = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash').strip() or 'gemini-2.0-flash'
+    configured_model = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip() or 'gemini-1.5-flash'
     genai.configure(api_key=api_key)
     available_models = _list_gemini_generate_content_models(genai)
     model_name = _pick_gemini_model_name(configured_model, available_models)
@@ -504,7 +517,7 @@ def _generate_gemini_draft(prompt: str) -> str:
         if not model_not_found:
             raise
 
-        fallback_model = _pick_gemini_model_name('gemini-2.0-flash', available_models)
+        fallback_model = _pick_gemini_model_name('gemini-1.5-flash', available_models)
         if _normalize_gemini_model_name(fallback_model) == _normalize_gemini_model_name(model_name):
             raise
 
@@ -520,6 +533,63 @@ def _generate_gemini_draft(prompt: str) -> str:
     if text:
         return text
     raise RuntimeError('Gemini returned an empty draft.')
+
+
+def _generate_gemini_announcement_payload(prompt: str) -> dict[str, str]:
+    api_key = (
+        os.getenv('GEMINI_API_KEY', '').strip()
+        or os.getenv('GOOGLE_API_KEY', '').strip()
+        or os.getenv('GEMENI_API_KEY', '').strip()
+    )
+    if not api_key:
+        raise ValueError('GEMINI_API_KEY is not configured.')
+
+    try:
+        import google.generativeai as genai
+    except Exception as exc:
+        raise RuntimeError('google-generativeai is not installed.') from exc
+
+    configured_model = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip() or 'gemini-1.5-flash'
+    genai.configure(api_key=api_key)
+    available_models = _list_gemini_generate_content_models(genai)
+    model_name = _pick_gemini_model_name(configured_model, available_models)
+    prompt_text = (
+        'You are drafting a student-portal announcement.\n'
+        'Return ONLY strict JSON with keys: "title" and "content".\n'
+        '- title: concise and actionable, max 120 chars.\n'
+        '- content: polished, clear, and ready to publish.\n'
+        '- do not include markdown.\n\n'
+        f'Request:\n{prompt.strip()}'
+    )
+
+    try:
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt_text)
+    except Exception as exc:
+        error_text = str(exc).lower()
+        model_not_found = 'not found' in error_text or 'not supported for generatecontent' in error_text
+        if not model_not_found:
+            raise
+
+        fallback_model = _pick_gemini_model_name('gemini-1.5-flash', available_models)
+        if _normalize_gemini_model_name(fallback_model) == _normalize_gemini_model_name(model_name):
+            raise
+        model = genai.GenerativeModel(fallback_model)
+        response = model.generate_content(prompt_text)
+
+    text = str(getattr(response, 'text', '') or '').strip()
+    parsed = _extract_json_payload(text)
+    if not isinstance(parsed, dict):
+        raise RuntimeError('Gemini did not return valid JSON title/content.')
+
+    title = str(parsed.get('title', '')).strip()
+    content = str(parsed.get('content', '')).strip()
+    if not title or not content:
+        raise RuntimeError('Gemini response missing title/content.')
+    return {
+        'title': title[:200],
+        'content': content,
+    }
 
 
 def _parse_iso_date(value: object) -> datetime.date | None:
@@ -578,6 +648,45 @@ def _resolve_assignment_deadline(request) -> tuple[datetime.date | None, datetim
     return due_date, due_time, None
 
 
+def _resolve_announcement_target(request) -> tuple[str, Course | None, Response | None]:
+    target_type = str(request.data.get('target_type', 'ALL')).strip().upper() or 'ALL'
+    valid_types = {'ALL', 'SECTION_A', 'SECTION_B', 'COURSE'}
+    if target_type not in valid_types:
+        return (
+            '',
+            None,
+            Response(
+                {'detail': f'Invalid target_type. Choose one of: {", ".join(sorted(valid_types))}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        )
+
+    target_course = None
+    if target_type == 'COURSE':
+        target_course_code = str(request.data.get('target_course_code', '')).strip().upper()
+        if not target_course_code:
+            return (
+                '',
+                None,
+                Response(
+                    {'detail': 'target_course_code is required when target_type is COURSE.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+        target_course = Course.objects.filter(code=target_course_code).first()
+        if target_course is None:
+            return (
+                '',
+                None,
+                Response(
+                    {'detail': f'Unknown target_course_code: {target_course_code}.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+
+    return target_type, target_course, None
+
+
 def _poll_visible_for_student(poll: Poll, student: Student, enrolled_course_ids: set[str]) -> bool:
     if poll.target_type == 'ALL':
         return True
@@ -587,6 +696,25 @@ def _poll_visible_for_student(poll: Poll, student: Student, enrolled_course_ids:
         return student.section == 'B'
     if poll.target_type == 'COURSE':
         return bool(poll.target_course_id and poll.target_course_id in enrolled_course_ids)
+    return False
+
+
+def _announcement_visible_for_student(
+    announcement: Announcement,
+    student: Student | None,
+    enrolled_course_ids: set[str],
+) -> bool:
+    target_type = str(getattr(announcement, 'target_type', '') or 'ALL').upper()
+    if target_type == 'ALL':
+        return True
+    if student is None:
+        return False
+    if target_type == 'SECTION_A':
+        return student.section == 'A'
+    if target_type == 'SECTION_B':
+        return student.section == 'B'
+    if target_type == 'COURSE':
+        return bool(announcement.target_course_id and announcement.target_course_id in enrolled_course_ids)
     return False
 
 
@@ -1436,12 +1564,21 @@ def get_mess_menu(request) -> Response:
 
 
 @cache_page(60 * 15)
-@vary_on_headers('X-Batch-Code')
+@vary_on_headers('X-Batch-Code', 'X-Student-Roll-Number')
 @api_view(['GET'])
 def get_dashboard_extras(request) -> Response:
     batch, batch_error = _batch_from_request(request)
     if batch_error:
         return batch_error
+
+    student_roll = str(
+        request.headers.get('X-Student-Roll-Number')
+        or request.query_params.get('roll_number')
+        or request.data.get('roll_number')
+        or ''
+    ).strip().upper()
+    student = Student.objects.filter(roll_number__iexact=student_roll).first() if student_roll else None
+    enrolled_course_ids = _enrolled_course_ids(student) if student else set()
 
     now = timezone.now()
     today = now.astimezone(LOCAL_TIMEZONE).date()
@@ -1455,7 +1592,16 @@ def get_dashboard_extras(request) -> Response:
         Q(starts_at__isnull=True) | Q(starts_at__lte=now),
         Q(expires_at__isnull=True) | Q(expires_at__gte=now),
         batch=batch,
-    ).order_by('-created_at')[:3]
+    ).select_related('target_course')
+    announcement_visibility = Q(target_type='ALL')
+    if student is not None:
+        if student.section == 'A':
+            announcement_visibility |= Q(target_type='SECTION_A')
+        elif student.section == 'B':
+            announcement_visibility |= Q(target_type='SECTION_B')
+        if enrolled_course_ids:
+            announcement_visibility |= Q(target_type='COURSE', target_course_id__in=enrolled_course_ids)
+    recent_announcements = recent_announcements.filter(announcement_visibility).order_by('-created_at')[:3]
     current_time = now.astimezone(LOCAL_TIMEZONE).time().replace(second=0, microsecond=0)
     upcoming_assignments = Assignment.objects.select_related('course').filter(
         batch=batch,
@@ -1906,8 +2052,16 @@ def admin_announcements(request) -> Response:
     if error_response:
         return error_response
 
+    batch, batch_error = _batch_from_request(request, required=False)
+    if batch_error:
+        return batch_error
+
     if request.method == 'GET':
-        announcements = Announcement.objects.order_by('-created_at')
+        announcements = (
+            Announcement.objects.select_related('target_course')
+            .filter(batch=batch)
+            .order_by('-created_at')
+        )
         serializer = AnnouncementSerializer(
             announcements,
             many=True,
@@ -1945,9 +2099,16 @@ def admin_announcements(request) -> Response:
     if not posted_by:
         posted_by = admin_user.get_full_name().strip() or admin_user.username
 
+    target_type, target_course, target_error = _resolve_announcement_target(request)
+    if target_error:
+        return target_error
+
     announcement = Announcement.objects.create(
+        batch=batch,
         title=title[:200],
         content=content,
+        target_type=target_type,
+        target_course=target_course,
         posted_by=posted_by[:100],
         starts_at=starts_at,
         expires_at=expires_at,
@@ -1964,7 +2125,11 @@ def admin_announcement_detail(request, announcement_id: int) -> Response:
     if error_response:
         return error_response
 
-    announcement = get_object_or_404(Announcement, pk=announcement_id)
+    batch, batch_error = _batch_from_request(request, required=False)
+    if batch_error:
+        return batch_error
+
+    announcement = get_object_or_404(Announcement, pk=announcement_id, batch=batch)
 
     if request.method == 'DELETE':
         announcement.delete()
@@ -1997,6 +2162,14 @@ def admin_announcement_detail(request, announcement_id: int) -> Response:
         if posted_by:
             announcement.posted_by = posted_by[:100]
             update_fields.append('posted_by')
+
+    if 'target_type' in request.data or 'target_course_code' in request.data:
+        target_type, target_course, target_error = _resolve_announcement_target(request)
+        if target_error:
+            return target_error
+        announcement.target_type = target_type
+        announcement.target_course = target_course
+        update_fields.extend(['target_type', 'target_course'])
 
     if 'starts_at' in request.data:
         starts_at = _parse_optional_datetime(request.data.get('starts_at'))
@@ -2081,6 +2254,7 @@ def admin_assignments(request) -> Response:
         course=course,
         title=title[:200],
         description=str(request.data.get('description', '')).strip(),
+        group_members=str(request.data.get('group_members', '')).strip(),
         due_date=due_date,
         due_time=due_time,
     )
@@ -2117,6 +2291,10 @@ def admin_assignment_detail(request, assignment_id: int) -> Response:
     if 'description' in request.data:
         assignment.description = str(request.data.get('description', '')).strip()
         update_fields.append('description')
+
+    if 'group_members' in request.data:
+        assignment.group_members = str(request.data.get('group_members', '')).strip()
+        update_fields.append('group_members')
 
     if 'course_code' in request.data:
         course_code = str(request.data.get('course_code', '')).strip().upper()
@@ -2307,6 +2485,144 @@ def admin_poll_detail(request, poll_id: int) -> Response:
     return Response(_serialize_poll_for_admin(refreshed_poll), status=status.HTTP_200_OK)
 
 
+@api_view(['GET', 'POST'])
+def admin_access_accounts(request) -> Response:
+    _, _, error_response = _require_ipmo_admin(request)
+    if error_response:
+        return error_response
+
+    if request.method == 'GET':
+        users = User.objects.filter(is_staff=True).order_by('-is_superuser', 'username')
+        payload = [_serialize_admin_account(user) for user in users]
+        return Response(payload, status=status.HTTP_200_OK)
+
+    username = str(request.data.get('username', '')).strip()
+    password = str(request.data.get('password', '')).strip()
+    role = str(request.data.get('role', 'CR')).strip().upper() or 'CR'
+    full_name = str(request.data.get('name', '')).strip()
+    is_active = _parse_bool(request.data.get('is_active', True), default=True)
+
+    if not username or not password:
+        return Response(
+            {'detail': 'username and password are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if role not in {'CR', 'IPMO'}:
+        return Response(
+            {'detail': 'role must be either CR or IPMO.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if User.objects.filter(username__iexact=username).exists():
+        return Response(
+            {'detail': 'An admin account with this username already exists.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    first_name = ''
+    last_name = ''
+    if full_name:
+        parts = full_name.split()
+        first_name = parts[0][:150]
+        last_name = ' '.join(parts[1:])[:150] if len(parts) > 1 else ''
+
+    user = User.objects.create(
+        username=username[:150],
+        first_name=first_name,
+        last_name=last_name,
+        is_staff=True,
+        is_superuser=(role == 'IPMO'),
+        is_active=is_active,
+    )
+    user.set_password(password)
+    user.save(update_fields=['password'])
+
+    return Response(_serialize_admin_account(user), status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def admin_access_account_detail(request, account_id: int) -> Response:
+    admin_user, _, error_response = _require_ipmo_admin(request)
+    if error_response:
+        return error_response
+
+    account = get_object_or_404(User, pk=account_id, is_staff=True)
+
+    if request.method == 'DELETE':
+        if account.id == admin_user.id:
+            return Response(
+                {'detail': 'You cannot delete your own admin account.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        account.is_active = False
+        account.save(update_fields=['is_active'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    update_fields: list[str] = []
+
+    if 'username' in request.data:
+        username = str(request.data.get('username', '')).strip()
+        if not username:
+            return Response(
+                {'detail': 'username cannot be empty.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        exists = User.objects.exclude(pk=account.pk).filter(username__iexact=username).exists()
+        if exists:
+            return Response(
+                {'detail': 'Another admin account already uses this username.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        account.username = username[:150]
+        update_fields.append('username')
+
+    if 'name' in request.data:
+        full_name = str(request.data.get('name', '')).strip()
+        if full_name:
+            parts = full_name.split()
+            account.first_name = parts[0][:150]
+            account.last_name = ' '.join(parts[1:])[:150] if len(parts) > 1 else ''
+        else:
+            account.first_name = ''
+            account.last_name = ''
+        update_fields.extend(['first_name', 'last_name'])
+
+    if 'role' in request.data:
+        role = str(request.data.get('role', '')).strip().upper()
+        if role not in {'CR', 'IPMO'}:
+            return Response(
+                {'detail': 'role must be either CR or IPMO.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        account.is_superuser = role == 'IPMO'
+        update_fields.append('is_superuser')
+
+    if 'is_active' in request.data:
+        next_active = _parse_bool(request.data.get('is_active'), default=account.is_active)
+        if account.id == admin_user.id and not next_active:
+            return Response(
+                {'detail': 'You cannot deactivate your own account.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        account.is_active = next_active
+        update_fields.append('is_active')
+
+    if 'password' in request.data:
+        password = str(request.data.get('password', '')).strip()
+        if not password:
+            return Response(
+                {'detail': 'password cannot be empty.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        account.set_password(password)
+        update_fields.append('password')
+
+    if update_fields:
+        account.save(update_fields=list(set(update_fields)))
+
+    refreshed = User.objects.get(pk=account.pk)
+    return Response(_serialize_admin_account(refreshed), status=status.HTTP_200_OK)
+
+
 @api_view(['GET'])
 def get_active_polls(request) -> Response:
     student, error_response = _student_from_request(request)
@@ -2396,6 +2712,7 @@ def cr_generate_draft(request) -> Response:
         return error_response
 
     prompt = str(request.data.get('prompt', '')).strip()
+    target = str(request.data.get('target', 'announcement')).strip().lower() or 'announcement'
     if not prompt:
         return Response(
             {'detail': 'prompt is required.'},
@@ -2403,13 +2720,27 @@ def cr_generate_draft(request) -> Response:
         )
 
     try:
-        draft = _generate_gemini_draft(prompt)
-        return Response({'draft': draft, 'source': 'gemini'}, status=status.HTTP_200_OK)
+        if target == 'assignment':
+            draft = _generate_gemini_draft(prompt)
+            return Response({'draft': draft, 'source': 'gemini', 'target': 'assignment'}, status=status.HTTP_200_OK)
+
+        payload = _generate_gemini_announcement_payload(prompt)
+        return Response(
+            {
+                'title': payload['title'],
+                'content': payload['content'],
+                'draft': payload['content'],
+                'source': 'gemini',
+                'target': 'announcement',
+            },
+            status=status.HTTP_200_OK,
+        )
     except Exception as exc:
         logger.warning('Gemini draft generation failed: %s', exc)
         fallback = _generate_announcement_draft(prompt)
-        fallback_draft = str(fallback.get('content', '')).strip()
-        if not fallback_draft:
+        fallback_title = str(fallback.get('title', '')).strip()
+        fallback_content = str(fallback.get('content', '')).strip()
+        if not fallback_content:
             return Response(
                 {'detail': f'Unable to generate draft right now: {exc}'},
                 status=status.HTTP_502_BAD_GATEWAY,
@@ -2420,8 +2751,11 @@ def cr_generate_draft(request) -> Response:
             reason = 'Gemini quota exceeded. Returned fallback draft.'
         return Response(
             {
-                'draft': fallback_draft,
+                'title': fallback_title,
+                'content': fallback_content,
+                'draft': fallback_content,
                 'source': 'fallback',
+                'target': target,
                 'detail': reason,
             },
             status=status.HTTP_200_OK,

@@ -2,8 +2,6 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
-  BellRing,
-  BrainCircuit,
   CalendarClock,
   CheckSquare,
   ClipboardCheck,
@@ -56,6 +54,21 @@ function announcementStatus(announcement) {
   return { label: 'Live', className: 'bg-emerald-100 text-emerald-700' }
 }
 
+function announcementAudienceLabel(announcement) {
+  const targetType = String(announcement?.target_type || 'ALL').toUpperCase()
+  if (targetType === 'SECTION_A') {
+    return 'Section A'
+  }
+  if (targetType === 'SECTION_B') {
+    return 'Section B'
+  }
+  if (targetType === 'COURSE') {
+    const code = announcement?.target_course?.code || ''
+    return code ? `Course • ${code}` : 'Course'
+  }
+  return 'Whole Batch'
+}
+
 function toIsoDateTime(dateValue, timeValue) {
   if (!dateValue || !timeValue) {
     return ''
@@ -65,6 +78,15 @@ function toIsoDateTime(dateValue, timeValue) {
     return ''
   }
   return parsed.toISOString()
+}
+
+function normalizeGroupMembers(rawValue) {
+  return String(rawValue || '')
+    .split(/\n|,|;/g)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value, index, array) => array.findIndex((candidate) => candidate.toLowerCase() === value.toLowerCase()) === index)
+    .join('\n')
 }
 
 export default function AdminPortal() {
@@ -100,6 +122,9 @@ export default function AdminPortal() {
   })
 
   const [announcementForm, setAnnouncementForm] = useState({
+    batchCode: '',
+    targetType: 'ALL',
+    targetCourseCode: '',
     title: '',
     content: '',
     postedBy: '',
@@ -111,6 +136,7 @@ export default function AdminPortal() {
     courseCode: '',
     title: '',
     description: '',
+    groupMembers: '',
     dueDate: '',
     dueTime: '',
   })
@@ -128,8 +154,6 @@ export default function AdminPortal() {
     description: '',
     driveLink: '',
     file: null,
-    sortOrder: '',
-    isPublished: true,
   })
 
   const isAuthenticated = Boolean(accessToken)
@@ -145,6 +169,22 @@ export default function AdminPortal() {
   const selectedCourseDetails = useMemo(() => {
     return courses.find((course) => course.code === selectedCourse) || null
   }, [courses, selectedCourse])
+
+  const pollAnalytics = useMemo(() => {
+    const totalPolls = polls.length
+    const totalVotes = polls.reduce((sum, poll) => sum + Number(poll.total_votes || 0), 0)
+    const avgVotes = totalPolls ? totalVotes / totalPolls : 0
+    const mostActivePoll = [...polls].sort(
+      (left, right) => Number(right.total_votes || 0) - Number(left.total_votes || 0),
+    )[0]
+    return {
+      totalPolls,
+      totalVotes,
+      avgVotes,
+      mostActiveTitle: mostActivePoll?.title || '',
+      mostActiveVotes: Number(mostActivePoll?.total_votes || 0),
+    }
+  }, [polls])
 
   useEffect(() => {
     if (!selectedCourseDetails) {
@@ -200,6 +240,11 @@ export default function AdminPortal() {
       setAssignmentForm((current) => ({
         ...current,
         courseCode: current.courseCode || nextCourses[0]?.code || '',
+      }))
+      setAnnouncementForm((current) => ({
+        ...current,
+        batchCode: current.batchCode || selectedBatch || nextBatches[0]?.code || '',
+        targetCourseCode: current.targetCourseCode || nextCourses[0]?.code || '',
       }))
       setPollForm((current) => ({
         ...current,
@@ -333,15 +378,19 @@ export default function AdminPortal() {
     try {
       const response = await adminApi.post('/api/v1/cr/generate-draft/', {
         prompt,
+        target: aiModal.target,
       })
       const draft = String(response.data?.draft || '').trim()
+      const suggestedTitle = String(response.data?.title || '').trim()
+      const suggestedContent = String(response.data?.content || '').trim() || draft
       if (!draft) {
         throw new Error('AI returned an empty draft.')
       }
       if (aiModal.target === 'announcement') {
         setAnnouncementForm((current) => ({
           ...current,
-          content: draft,
+          title: suggestedTitle || current.title,
+          content: suggestedContent,
         }))
       } else {
         setAssignmentForm((current) => ({
@@ -362,7 +411,21 @@ export default function AdminPortal() {
     setGlobalError('')
     setGlobalSuccess('')
 
+    if (!announcementForm.batchCode) {
+      setGlobalError('Please choose a batch for the announcement.')
+      return
+    }
+    if (announcementForm.targetType === 'COURSE' && !announcementForm.targetCourseCode) {
+      setGlobalError('Please choose a course for course-targeted announcement.')
+      return
+    }
+
     const payload = new FormData()
+    payload.append('batch_code', announcementForm.batchCode)
+    payload.append('target_type', announcementForm.targetType)
+    if (announcementForm.targetType === 'COURSE') {
+      payload.append('target_course_code', announcementForm.targetCourseCode)
+    }
     payload.append('title', announcementForm.title)
     payload.append('content', announcementForm.content)
     if (announcementForm.postedBy.trim()) {
@@ -413,6 +476,7 @@ export default function AdminPortal() {
         course_code: assignmentForm.courseCode,
         title: assignmentForm.title,
         description: assignmentForm.description,
+        group_members: normalizeGroupMembers(assignmentForm.groupMembers),
         due_at: dueAt,
       })
       setAssignments((current) => [...current, response.data].sort((a, b) => {
@@ -424,12 +488,29 @@ export default function AdminPortal() {
         ...current,
         title: '',
         description: '',
+        groupMembers: '',
         dueDate: '',
         dueTime: '',
       }))
       setGlobalSuccess('Assignment created.')
     } catch (error) {
       setGlobalError(error?.response?.data?.detail || 'Failed to create assignment.')
+    }
+  }
+
+  async function handleGroupMemberFileUpload(file) {
+    if (!file) {
+      return
+    }
+    try {
+      const text = await file.text()
+      setAssignmentForm((current) => ({
+        ...current,
+        groupMembers: normalizeGroupMembers(text),
+      }))
+      setGlobalSuccess('Group member list parsed from file.')
+    } catch {
+      setGlobalError('Unable to read the selected group member file.')
     }
   }
 
@@ -545,10 +626,6 @@ export default function AdminPortal() {
     payload.append('title', materialForm.title)
     payload.append('description', materialForm.description)
     payload.append('drive_link', materialForm.driveLink)
-    payload.append('is_published', String(materialForm.isPublished))
-    if (materialForm.sortOrder) {
-      payload.append('sort_order', materialForm.sortOrder)
-    }
     if (materialForm.file) {
       payload.append('file', materialForm.file)
     }
@@ -562,8 +639,6 @@ export default function AdminPortal() {
         description: '',
         driveLink: '',
         file: null,
-        sortOrder: '',
-        isPublished: true,
       })
       await fetchMaterials(selectedCourse)
       setGlobalSuccess('Course material added.')
@@ -611,25 +686,6 @@ export default function AdminPortal() {
       setGlobalSuccess('Material order updated.')
     } catch (error) {
       setGlobalError(error?.response?.data?.detail || 'Failed to reorder materials.')
-    }
-  }
-
-  async function arrangeMaterialsWithAI() {
-    if (!selectedCourse) {
-      setGlobalError('Please select a course first.')
-      return
-    }
-
-    setGlobalError('')
-    setGlobalSuccess('')
-    try {
-      const response = await adminApi.post('/api/v1/admin/ai/arrange-materials/', {
-        course_code: selectedCourse,
-      })
-      setMaterials(Array.isArray(response.data) ? response.data : [])
-      setGlobalSuccess('Materials arranged successfully.')
-    } catch (error) {
-      setGlobalError(error?.response?.data?.detail || 'AI material arrangement failed.')
     }
   }
 
@@ -833,6 +889,61 @@ export default function AdminPortal() {
 
                 {activeComposerTab === 'announcement' ? (
                   <form onSubmit={createAnnouncement} className="mt-5 space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Batch
+                        <select
+                          value={announcementForm.batchCode}
+                          onChange={(event) =>
+                            setAnnouncementForm((current) => ({ ...current, batchCode: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                          required
+                        >
+                          {availableBatches.map((batch) => (
+                            <option key={batch.code} value={batch.code}>
+                              {batch.display_name || batch.name || batch.code}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Audience
+                        <select
+                          value={announcementForm.targetType}
+                          onChange={(event) =>
+                            setAnnouncementForm((current) => ({ ...current, targetType: event.target.value }))
+                          }
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        >
+                          <option value="ALL">Whole Batch</option>
+                          <option value="SECTION_A">Section A</option>
+                          <option value="SECTION_B">Section B</option>
+                          <option value="COURSE">Specific Course</option>
+                        </select>
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Course
+                        <select
+                          value={announcementForm.targetCourseCode}
+                          onChange={(event) =>
+                            setAnnouncementForm((current) => ({
+                              ...current,
+                              targetCourseCode: event.target.value,
+                            }))
+                          }
+                          disabled={announcementForm.targetType !== 'COURSE'}
+                          className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        >
+                          {courses.map((course) => (
+                            <option key={course.code} value={course.code}>
+                              {course.code} - {course.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
                     <div className="grid gap-4 md:grid-cols-2">
                       <label className="block text-sm font-medium text-slate-700">
                         Title
@@ -852,7 +963,7 @@ export default function AdminPortal() {
                           onChange={(event) =>
                             setAnnouncementForm((current) => ({ ...current, postedBy: event.target.value }))
                           }
-                          placeholder="Optional (auto-fills from logged in admin)"
+                          placeholder="Optional override (auto-fills from logged in admin)"
                           className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
                         />
                       </label>
@@ -1010,6 +1121,33 @@ export default function AdminPortal() {
                         }
                         className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
                       />
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Group Members (one roll number per line)
+                        <textarea
+                          rows={4}
+                          value={assignmentForm.groupMembers}
+                          onChange={(event) =>
+                            setAssignmentForm((current) => ({
+                              ...current,
+                              groupMembers: event.target.value,
+                            }))
+                          }
+                          placeholder="2023IPM079&#10;2023IPM081&#10;2023IPM102"
+                          className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Upload Group List (.txt/.csv)
+                        <input
+                          type="file"
+                          accept=".txt,.csv"
+                          onChange={(event) => handleGroupMemberFileUpload(event.target.files?.[0] || null)}
+                          className="mt-1 block w-full cursor-pointer rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-600 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
+                        />
+                      </label>
                     </div>
 
                     <button
@@ -1183,17 +1321,9 @@ export default function AdminPortal() {
                       </span>
                     </h2>
                     <p className="mt-1 text-sm text-slate-500">
-                      Upload files, add links, and arrange delivery order for each subject.
+                      Upload files and links for each subject in a clean, student-ready format.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={arrangeMaterialsWithAI}
-                    className="inline-flex items-center gap-2 rounded-xl border border-iim-blue/30 bg-blue-50 px-4 py-2 text-sm font-semibold text-iim-blue transition hover:bg-blue-100"
-                  >
-                    <BrainCircuit className="h-4 w-4" />
-                    Arrange with AI
-                  </button>
                 </div>
 
                 <div className="mt-4 grid gap-4 md:grid-cols-[0.55fr_0.45fr]">
@@ -1234,31 +1364,17 @@ export default function AdminPortal() {
                 </div>
 
                 <form onSubmit={createMaterial} className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <label className="block text-sm font-medium text-slate-700">
-                      Material Title
-                      <input
-                        value={materialForm.title}
-                        onChange={(event) =>
-                          setMaterialForm((current) => ({ ...current, title: event.target.value }))
-                        }
-                        className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
-                        required
-                      />
-                    </label>
-                    <label className="block text-sm font-medium text-slate-700">
-                      Sort Order (optional)
-                      <input
-                        type="number"
-                        min="0"
-                        value={materialForm.sortOrder}
-                        onChange={(event) =>
-                          setMaterialForm((current) => ({ ...current, sortOrder: event.target.value }))
-                        }
-                        className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
-                      />
-                    </label>
-                  </div>
+                  <label className="block text-sm font-medium text-slate-700">
+                    Material Title
+                    <input
+                      value={materialForm.title}
+                      onChange={(event) =>
+                        setMaterialForm((current) => ({ ...current, title: event.target.value }))
+                      }
+                      className="mt-1 h-11 w-full rounded-xl border border-slate-300 px-3 text-sm outline-none transition focus:border-iim-blue focus:ring-2 focus:ring-iim-blue/20"
+                      required
+                    />
+                  </label>
 
                   <label className="block text-sm font-medium text-slate-700">
                     Description
@@ -1295,18 +1411,6 @@ export default function AdminPortal() {
                       />
                     </label>
                   </div>
-
-                  <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={materialForm.isPublished}
-                      onChange={(event) =>
-                        setMaterialForm((current) => ({ ...current, isPublished: event.target.checked }))
-                      }
-                      className="h-4 w-4 rounded border-slate-300 text-iim-blue focus:ring-iim-blue/30"
-                    />
-                    Publish immediately
-                  </label>
 
                   <button
                     type="submit"
@@ -1348,6 +1452,9 @@ export default function AdminPortal() {
                               </p>
                               <p className="mt-1 text-xs text-slate-500">
                                 {announcement.posted_by} • {toLocalDateTimeLabel(announcement.created_at)}
+                              </p>
+                              <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-indigo-600">
+                                {announcementAudienceLabel(announcement)}
                               </p>
                             </div>
                             <span
@@ -1408,6 +1515,24 @@ export default function AdminPortal() {
                         {assignment.description ? (
                           <p className="mt-2 text-sm text-slate-700">{assignment.description}</p>
                         ) : null}
+                        {(assignment.group_members_list || assignment.group_members) ? (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {(Array.isArray(assignment.group_members_list)
+                              ? assignment.group_members_list
+                              : String(assignment.group_members || '')
+                                  .split(/\n|,|;/g)
+                                  .map((item) => item.trim())
+                                  .filter(Boolean)
+                            ).map((member) => (
+                              <span
+                                key={`${assignment.id}-${member}`}
+                                className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700"
+                              >
+                                {member}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => deleteAssignment(assignment.id)}
@@ -1425,6 +1550,28 @@ export default function AdminPortal() {
               <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h2 className="heading-tight text-xl font-semibold text-slate-900">Live Polls</h2>
                 <p className="mt-1 text-sm text-slate-500">Targeted polls currently visible to students.</p>
+                <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Polls</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">{pollAnalytics.totalPolls}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Total Votes</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">{pollAnalytics.totalVotes}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Avg Votes/Poll</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">
+                      {pollAnalytics.avgVotes.toFixed(1)}
+                    </p>
+                  </div>
+                </div>
+                {pollAnalytics.mostActiveTitle ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Most active poll: <span className="font-semibold text-slate-700">{pollAnalytics.mostActiveTitle}</span>{' '}
+                    ({pollAnalytics.mostActiveVotes} votes)
+                  </p>
+                ) : null}
                 <div className="mt-4 max-h-[360px] space-y-3 overflow-y-auto pr-1">
                   {polls.length === 0 ? (
                     <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
@@ -1454,6 +1601,18 @@ export default function AdminPortal() {
                                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
                                   {option.vote_count ?? 0} vote{(option.vote_count ?? 0) === 1 ? '' : 's'}
                                 </span>
+                              </div>
+                              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                  className="h-full rounded-full bg-indigo-500"
+                                  style={{
+                                    width: `${
+                                      (Number(option.vote_count || 0) /
+                                        Math.max(1, Number(poll.total_votes || 0))) *
+                                      100
+                                    }%`,
+                                  }}
+                                />
                               </div>
                               {(option.voters || []).length > 0 ? (
                                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1592,7 +1751,7 @@ export default function AdminPortal() {
               <div className="rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs text-blue-900">
                 <p className="font-semibold">AI behavior:</p>
                 <p className="mt-1">
-                  Set `GEMINI_API_KEY` in backend `.env` to enable AI draft generation.
+                  Set `GEMINI_API_KEY` and (optionally) `GEMINI_MODEL=gemini-1.5-flash` in backend env.
                 </p>
               </div>
             </section>

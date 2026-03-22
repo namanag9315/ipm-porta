@@ -28,6 +28,25 @@ from academic_core.models import (
 from academic_core.utils import format_batch_name, infer_ipm_year_label
 
 
+def _split_group_members(raw_value: str) -> list[str]:
+    text = str(raw_value or '').strip()
+    if not text:
+        return []
+    members = re.split(r'[\n,;]+', text)
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for member in members:
+        value = member.strip()
+        if not value:
+            continue
+        normalized = value.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(value)
+    return cleaned
+
+
 class BatchSerializer(serializers.ModelSerializer):
     display_name = serializers.SerializerMethodField()
     ipm_year = serializers.SerializerMethodField()
@@ -224,6 +243,7 @@ class MessMenuSerializer(serializers.ModelSerializer):
 
 class AnnouncementSerializer(serializers.ModelSerializer):
     attachment_url = serializers.SerializerMethodField()
+    target_course = CourseSerializer(read_only=True)
 
     def get_attachment_url(self, obj):
         if not obj.attachment:
@@ -239,6 +259,8 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'id',
             'title',
             'content',
+            'target_type',
+            'target_course',
             'posted_by',
             'starts_at',
             'expires_at',
@@ -251,15 +273,30 @@ class AnnouncementSerializer(serializers.ModelSerializer):
 class AssignmentSerializer(serializers.ModelSerializer):
     course = CourseSerializer(read_only=True)
     due_at = serializers.SerializerMethodField()
+    group_members_list = serializers.SerializerMethodField()
 
     def get_due_at(self, obj):
         due_time = obj.due_time or datetime.time(23, 59)
         due_datetime = datetime.datetime.combine(obj.due_date, due_time)
         return due_datetime.isoformat()
 
+    def get_group_members_list(self, obj):
+        return _split_group_members(obj.group_members)
+
     class Meta:
         model = Assignment
-        fields = ['id', 'course', 'title', 'description', 'due_date', 'due_time', 'due_at', 'created_at']
+        fields = [
+            'id',
+            'course',
+            'title',
+            'description',
+            'group_members',
+            'group_members_list',
+            'due_date',
+            'due_time',
+            'due_at',
+            'created_at',
+        ]
 
 
 class PollOptionSerializer(serializers.ModelSerializer):

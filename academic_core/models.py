@@ -171,9 +171,24 @@ class MessMenu(models.Model):
 
 
 class Announcement(models.Model):
+    TARGET_TYPE_CHOICES = [
+        ('ALL', 'All Students in Batch'),
+        ('SECTION_A', 'Section A'),
+        ('SECTION_B', 'Section B'),
+        ('COURSE', 'Specific Course'),
+    ]
+
     batch = models.ForeignKey(Batch, on_delete=models.CASCADE, null=True, blank=True, related_name='announcements')
     title = models.CharField(max_length=200)
     content = models.TextField()
+    target_type = models.CharField(max_length=12, choices=TARGET_TYPE_CHOICES, default='ALL', db_index=True)
+    target_course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='announcements',
+    )
     posted_by = models.CharField(max_length=100)
     starts_at = models.DateTimeField(null=True, blank=True, db_index=True)
     expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -198,6 +213,7 @@ class Assignment(models.Model):
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assignments')
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
+    group_members = models.TextField(blank=True, default='')
     due_date = models.DateField(db_index=True)
     due_time = models.TimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
