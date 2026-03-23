@@ -300,6 +300,11 @@ export default function Dashboard() {
   const [birthdaysToday, setBirthdaysToday] = useState([])
   const [recentAnnouncements, setRecentAnnouncements] = useState([])
   const [upcomingAssignments, setUpcomingAssignments] = useState([])
+  const [readingsSummary, setReadingsSummary] = useState({
+    totalMaterials: 0,
+    latestMaterialAt: '',
+    latestCourseCode: '',
+  })
   const [expandedAssignments, setExpandedAssignments] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -386,6 +391,12 @@ export default function Dashboard() {
                 timeout: DASHBOARD_SECONDARY_TIMEOUT_MS,
               })
             : Promise.resolve({ data: [] }),
+          user?.rollNumber
+            ? api.get(`/api/v1/readings/${user.rollNumber}/`, {
+                signal: controller.signal,
+                timeout: DASHBOARD_SECONDARY_TIMEOUT_MS,
+              })
+            : Promise.resolve({ data: [] }),
           ...menuDates.map((dateIso) =>
             api.get(`/api/v1/mess-menu/?date=${dateIso}&template_fallback=1`, {
               signal: controller.signal,
@@ -399,7 +410,8 @@ export default function Dashboard() {
 
         const extrasRes = secondaryResults[0]?.status === 'fulfilled' ? secondaryResults[0].value : null
         const pollsRes = secondaryResults[1]?.status === 'fulfilled' ? secondaryResults[1].value : null
-        const menuResponses = secondaryResults.slice(2)
+        const readingsRes = secondaryResults[2]?.status === 'fulfilled' ? secondaryResults[2].value : null
+        const menuResponses = secondaryResults.slice(3)
 
         if (extrasRes) {
           const rawAnnouncements = Array.isArray(extrasRes.data?.recent_announcements)
@@ -416,6 +428,35 @@ export default function Dashboard() {
           setBirthdaysToday([])
           setRecentAnnouncements([])
           setUpcomingAssignments([])
+        }
+
+        if (readingsRes) {
+          const readingCourses = Array.isArray(readingsRes.data) ? readingsRes.data : []
+          const flattenedMaterials = readingCourses.flatMap((course) => {
+            const materials = Array.isArray(course?.materials) ? course.materials : []
+            return materials.map((material) => ({
+              ...material,
+              _courseCode: course?.code || '',
+            }))
+          })
+
+          const latestMaterial = flattenedMaterials.reduce((latest, material) => {
+            const materialDate = new Date(material?.updated_at || material?.created_at || 0).getTime()
+            const latestDate = new Date(latest?.updated_at || latest?.created_at || 0).getTime()
+            return materialDate > latestDate ? material : latest
+          }, null)
+
+          setReadingsSummary({
+            totalMaterials: flattenedMaterials.length,
+            latestMaterialAt: latestMaterial?.updated_at || latestMaterial?.created_at || '',
+            latestCourseCode: String(latestMaterial?._courseCode || '').toUpperCase(),
+          })
+        } else {
+          setReadingsSummary({
+            totalMaterials: 0,
+            latestMaterialAt: '',
+            latestCourseCode: '',
+          })
         }
 
         const flattenedMenus = menuResponses.flatMap((result, index) => {
@@ -602,7 +643,17 @@ export default function Dashboard() {
       '',
   )
   const averageAttendanceHealth = getAttendanceHealth(averageAttendance)
-  const driveLink = attendance.find((entry) => entry?.course?.drive_link)?.course?.drive_link
+  const hasRecentMaterialUpdate = useMemo(() => {
+    if (!readingsSummary.latestMaterialAt) {
+      return false
+    }
+    const updatedAtEpoch = new Date(readingsSummary.latestMaterialAt).getTime()
+    if (Number.isNaN(updatedAtEpoch)) {
+      return false
+    }
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
+    return Date.now() - updatedAtEpoch <= sevenDaysMs
+  }, [readingsSummary.latestMaterialAt])
 
   return (
     <div className="space-y-6">
@@ -939,32 +990,37 @@ export default function Dashboard() {
               transition={{ duration: 0.48, delay: 0.2 }}
               className={cn(DASHBOARD_CARD_CLASS, 'group')}
             >
-              <a
-                href={driveLink || '/dashboard/attendance'}
-                target={driveLink ? '_blank' : undefined}
-                rel={driveLink ? 'noreferrer' : undefined}
-                className="flex h-full flex-col justify-between"
-              >
+              <Link to="/dashboard/readings" className="flex h-full flex-col justify-between">
                 <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-iim-blue transition group-hover:scale-105 group-hover:bg-blue-100">
                   <BookOpenText className="h-6 w-6" />
                 </div>
 
                 <div className="mt-10">
-                  <p className={DASHBOARD_CARD_TITLE_CLASS}>Drive Materials</p>
+                  <p className={DASHBOARD_CARD_TITLE_CLASS}>Course Materials</p>
                   <p className={cn(DASHBOARD_CARD_SUBTEXT_CLASS, 'mt-1')}>
-                    {driveLink ? 'Open your course resources' : 'No drive links mapped yet'}
+                    {readingsSummary.totalMaterials > 0
+                      ? `${readingsSummary.totalMaterials} published material${
+                          readingsSummary.totalMaterials > 1 ? 's' : ''
+                        } available`
+                      : 'No materials uploaded yet'}
                   </p>
+                  {readingsSummary.latestMaterialAt ? (
+                    <p className="mt-2 text-xs text-slate-500">
+                      Latest update: {formatDateLabel(readingsSummary.latestMaterialAt)}
+                      {readingsSummary.latestCourseCode ? ` (${readingsSummary.latestCourseCode})` : ''}
+                    </p>
+                  ) : null}
+                  {hasRecentMaterialUpdate ? (
+                    <p className="mt-2 inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                      New material uploaded recently
+                    </p>
+                  ) : null}
                 </div>
 
-                <span
-                  className={cn(
-                    'mt-5 inline-flex items-center gap-2 text-sm font-medium',
-                    driveLink ? 'text-iim-blue' : 'text-slate-500',
-                  )}
-                >
-                  {driveLink ? 'Open link' : 'Go to attendance'} <ArrowRight className="h-4 w-4" />
+                <span className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-iim-blue">
+                  Open Course Materials <ArrowRight className="h-4 w-4" />
                 </span>
-              </a>
+              </Link>
             </motion.section>
 
             <motion.section
