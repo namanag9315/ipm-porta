@@ -47,7 +47,7 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  const login = async ({ rollNumber, password, captchaToken = '' }) => {
+  const login = async ({ rollNumber, password, captchaToken = '', rememberMe = false }) => {
     setLoading(true)
     try {
       const response = await loginWithRetry({ rollNumber, password, captchaToken })
@@ -61,7 +61,7 @@ export function AuthProvider({ children }) {
         throw new Error('Login response did not include an access token.')
       }
 
-      storeAuth({ accessToken, refreshToken, user: parsedUser })
+      storeAuth({ accessToken, refreshToken, user: parsedUser, rememberMe })
       setUser(parsedUser)
       return parsedUser
     } finally {

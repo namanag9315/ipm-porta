@@ -9,6 +9,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import iimIndoreWatermark from '../assets/iim indore image.webp'
 import FloatingLabelInput from '../components/ui/FloatingLabelInput'
 import { cn } from '../lib/cn'
+import { getRememberMePreference } from '../lib/storage'
 import { useAuth } from '../hooks/useAuth'
 
 const CAMPUS_HERO_IMAGE_URL = iimIndoreWatermark
@@ -44,6 +45,10 @@ export default function LoginPage() {
 
   const [rollNumber, setRollNumber] = useState('')
   const [password, setPassword] = useState('')
+  const [rememberMe, setRememberMe] = useState(() => {
+    const storedPreference = getRememberMePreference()
+    return storedPreference ?? true
+  })
   const [recaptchaReady, setRecaptchaReady] = useState(false)
   const [error, setError] = useState('')
 
@@ -138,6 +143,7 @@ export default function LoginPage() {
         rollNumber: rollNumber.trim().toUpperCase(),
         password,
         captchaToken,
+        rememberMe,
       })
       navigate(fromPath, { replace: true })
     } catch (submitError) {
@@ -233,6 +239,16 @@ export default function LoginPage() {
               onChange={(event) => setPassword(event.target.value)}
               required
             />
+
+            <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(event) => setRememberMe(event.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-iim-blue focus:ring-iim-blue"
+              />
+              <span>Remember me on this device</span>
+            </label>
 
             {recaptchaEnabled ? (
               <div className="rounded-2xl border border-slate-200 bg-slate-50/90 px-4 py-3 text-xs text-slate-600">
