@@ -84,7 +84,7 @@ export function AuthProvider({ children }) {
 
     while (attempt < maxAttempts) {
       try {
-        return await api.post('/api/auth/login/', payload)
+        return await api.post('/api/auth/login/', payload, { timeout: 20000 })
       } catch (error) {
         attempt += 1
         const status = error?.response?.status

@@ -1396,6 +1396,17 @@ def get_bus_schedule(request) -> Response:
     return Response(payload, status=status.HTTP_200_OK)
 
 
+@api_view(['GET'])
+def status_ping(request) -> Response:
+    return Response(
+        {
+            'status': 'ok',
+            'timestamp': timezone.now().isoformat(),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(['POST'])
 def login_student(request) -> Response:
     roll_number = str(request.data.get('roll_number', '')).strip().upper()

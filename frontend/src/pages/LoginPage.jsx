@@ -3,12 +3,13 @@ import {
   GraduationCap,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import iimIndoreWatermark from '../assets/iim indore image.webp'
 import FloatingLabelInput from '../components/ui/FloatingLabelInput'
 import { cn } from '../lib/cn'
+import api from '../lib/api'
 import { getRememberMePreference } from '../lib/storage'
 import { useAuth } from '../hooks/useAuth'
 
@@ -16,6 +17,10 @@ const CAMPUS_HERO_IMAGE_URL = iimIndoreWatermark
 const IIM_INDORE_LOGO_URL = 'https://upload.wikimedia.org/wikipedia/commons/a/a5/IIM_Indore_Logo.svg'
 const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY || ''
 const RECAPTCHA_ACTION = import.meta.env.VITE_RECAPTCHA_ACTION || 'student_login'
+const BACKEND_WARMUP_TIMEOUT_MS = 12000
+const BACKEND_WARMUP_ATTEMPTS = 3
+
+const sleep = (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs))
 
 async function requestRecaptchaToken(siteKey, action) {
   if (!window.grecaptcha || typeof window.grecaptcha.execute !== 'function') {
@@ -50,10 +55,40 @@ export default function LoginPage() {
     return storedPreference ?? true
   })
   const [recaptchaReady, setRecaptchaReady] = useState(false)
+  const [backendReady, setBackendReady] = useState(false)
   const [error, setError] = useState('')
 
   const fromPath = location.state?.from?.pathname || '/dashboard'
   const recaptchaEnabled = Boolean(RECAPTCHA_SITE_KEY)
+
+  const warmUpBackend = useCallback(async (signal) => {
+    for (let attempt = 1; attempt <= BACKEND_WARMUP_ATTEMPTS; attempt += 1) {
+      try {
+        await api.get('/api/v1/status/ping/', {
+          signal,
+          timeout: BACKEND_WARMUP_TIMEOUT_MS,
+        })
+        setBackendReady(true)
+        return true
+      } catch (warmupError) {
+        if (warmupError?.name === 'CanceledError' || signal?.aborted) {
+          return false
+        }
+        if (attempt === BACKEND_WARMUP_ATTEMPTS) {
+          break
+        }
+        await sleep(500 * attempt)
+      }
+    }
+    setBackendReady(false)
+    return false
+  }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    warmUpBackend(controller.signal)
+    return () => controller.abort()
+  }, [warmUpBackend])
 
   useEffect(() => {
     if (!recaptchaEnabled) {
@@ -117,6 +152,10 @@ export default function LoginPage() {
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
+
+    if (!backendReady) {
+      await warmUpBackend()
+    }
 
     let captchaToken = ''
     if (recaptchaEnabled) {
@@ -270,6 +309,12 @@ export default function LoginPage() {
                   <AlertCircle className="mt-0.5 h-4 w-4" />
                   <span>{error}</span>
                 </div>
+              </div>
+            ) : null}
+
+            {!backendReady ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                Preparing server for a faster login...
               </div>
             ) : null}
 
