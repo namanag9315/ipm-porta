@@ -10,6 +10,7 @@ import pandas as pd
 import requests
 from celery import shared_task
 from django.conf import settings
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, connection, transaction
@@ -1548,6 +1549,15 @@ def _initial_sync_stats() -> dict[str, Any]:
     }
 
 
+def _invalidate_sync_caches() -> None:
+    # Attendance, timetable, mess-menu and dashboard extras are cache_page-decorated.
+    # Clearing after sync ensures users see fresh sheet data immediately.
+    try:
+        cache.clear()
+    except Exception:
+        logger.exception('Failed to clear cache after sync.')
+
+
 def _merge_stat_bucket(aggregate: dict[str, Any], section: str, stats: dict[str, Any]) -> None:
     bucket = aggregate.get(section)
     if not isinstance(bucket, dict):
@@ -1591,6 +1601,7 @@ def sync_google_sheets_data(batch_code: str | None = None) -> dict[str, Any]:
                 _merge_stat_bucket(result, section, result['batches']['default'].get(section, {}))
             result['errors'].extend(result['batches']['default'].get('errors', []))
             result['status'] = 'completed_with_errors' if result['errors'] else 'completed'
+            _invalidate_sync_caches()
             return result
 
         for settings_obj in term_settings_list:
@@ -1613,6 +1624,7 @@ def sync_google_sheets_data(batch_code: str | None = None) -> dict[str, Any]:
             result['errors'].extend([f'[{batch_key}] {error}' for error in batch_result.get('errors', [])])
 
         result['status'] = 'completed_with_errors' if result['errors'] else 'completed'
+        _invalidate_sync_caches()
     return result
 
 
