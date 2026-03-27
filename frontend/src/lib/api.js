@@ -2,6 +2,9 @@ import axios from 'axios'
 
 import { getAccessToken, getStoredUser } from './storage'
 
+const SAFE_RETRY_METHODS = new Set(['get', 'head', 'options'])
+const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524])
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
   timeout: 60000,
@@ -30,14 +33,19 @@ api.interceptors.response.use(
   async (error) => {
     const config = error?.config
     const status = error?.response?.status
+    const method = String(config?.method || 'get').toLowerCase()
+    const retryCount = Number(config?.__retryCount || 0)
     const shouldRetry =
       config &&
-      !config.__retry &&
-      (status === 502 || status === 503 || status === 504 || !error.response)
+      SAFE_RETRY_METHODS.has(method) &&
+      retryCount < 1 &&
+      (!error.response || RETRYABLE_STATUSES.has(status))
     if (!shouldRetry) {
       return Promise.reject(error)
     }
-    config.__retry = true
+
+    config.__retryCount = retryCount + 1
+    await new Promise((resolve) => setTimeout(resolve, 350))
     return api(config)
   },
 )

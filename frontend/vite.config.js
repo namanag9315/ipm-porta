@@ -13,6 +13,20 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          animation: ['framer-motion'],
+          charts: ['recharts'],
+          icons: ['lucide-react'],
+          network: ['axios'],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {
